@@ -29,9 +29,11 @@ class Backtester:
 
             yf_map = {
                 "XAUUSD": "GC=F",
+                "GOLD#": "GC=F",
                 "XAGUSD": "SI=F",
                 "BTCUSD": "BTC-USD",
                 "ETHUSD": "ETH-USD",
+                "AUDUSD": "AUDUSD=X",
             }
             ticker = yf_map.get(symbol, symbol)
             end = datetime.now()
