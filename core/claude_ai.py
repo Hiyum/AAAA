@@ -18,7 +18,11 @@ class ClaudeAI:
     def __init__(self):
         self.available = ANTHROPIC_AVAILABLE and bool(Config.ANTHROPIC_API_KEY)
         if self.available:
-            self.client = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
+            try:
+                self.client = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
+            except Exception as e:
+                logger.warning(f"Claude 클라이언트 초기화 실패: {e}")
+                self.available = False
         self.model = Config.CLAUDE_MODEL
 
     def analyze_market(self, symbol: str, market_summary: Dict[str, Any],
