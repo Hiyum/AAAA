@@ -17,7 +17,7 @@ class Config:
     DEFAULT_DAILY_LOSS_LIMIT = 0.05  # 5% daily loss limit (manual mode)
 
     # Supported symbols (MT5 registered)
-    PRIORITY_SYMBOLS = ["GOLD#", "AUDUSD"]
+    PRIORITY_SYMBOLS = ["GOLD#", "AUDUSD#"]
 
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
     LOG_FILE = "logs/trades.json"
