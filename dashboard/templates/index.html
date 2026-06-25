@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 자동매매 시스템</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', sans-serif; font-size: 14px; }
+
+  .topbar {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .topbar h1 { font-size: 18px; font-weight: 700; color: #58a6ff; }
+  .topbar .badge {
+    padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;
+    background: #21262d; border: 1px solid #30363d; color: #8b949e;
+  }
+  .badge.connected { background: #0d4a2e; border-color: #238636; color: #3fb950; }
+  .badge.active { background: #0d3a6e; border-color: #1f6feb; color: #58a6ff; animation: pulse 2s infinite; }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+  .layout { display: grid; grid-template-columns: 300px 1fr; gap: 0; height: calc(100vh - 57px); }
+
+  .sidebar {
+    background: #161b22;
+    border-right: 1px solid #30363d;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .main { overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .card-title {
+    font-size: 12px; font-weight: 600; color: #8b949e;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 12px;
+  }
+
+  .account-info { display: flex; flex-direction: column; gap: 8px; }
+  .info-row { display: flex; justify-content: space-between; align-items: center; }
+  .info-label { color: #8b949e; font-size: 12px; }
+  .info-value { font-weight: 600; font-size: 14px; }
+  .info-value.profit { color: #3fb950; }
+  .info-value.loss { color: #f85149; }
+
+  .profit-display {
+    text-align: center;
+    padding: 12px;
+    background: #0d1117;
+    border-radius: 6px;
+    margin-bottom: 12px;
+  }
+  .profit-display .label { font-size: 11px; color: #8b949e; margin-bottom: 4px; }
+  .profit-display .amount { font-size: 28px; font-weight: 700; }
+  .profit-display .amount.positive { color: #3fb950; }
+  .profit-display .amount.negative { color: #f85149; }
+  .profit-display .amount.zero { color: #8b949e; }
+
+  input, select {
+    width: 100%;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #e6edf3;
+    padding: 8px 10px;
+    font-size: 13px;
+    margin-bottom: 8px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input:focus, select:focus { border-color: #58a6ff; }
+  input::placeholder { color: #484f58; }
+
+  .btn {
+    width: 100%;
+    padding: 9px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-primary { background: #238636; color: #fff; }
+  .btn-primary:hover { background: #2ea043; }
+  .btn-danger { background: #b62324; color: #fff; }
+  .btn-danger:hover { background: #da3633; }
+  .btn-blue { background: #1f6feb; color: #fff; }
+  .btn-blue:hover { background: #388bfd; }
+  .btn-gray { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
+  .btn-gray:hover { background: #30363d; }
+  .btn-sm { padding: 6px 12px; width: auto; font-size: 12px; }
+
+  .toggle-btn {
+    width: 100%;
+    padding: 14px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    border: 2px solid;
+    transition: all 0.2s;
+    text-align: center;
+  }
+  .toggle-btn.start { background: #0d4a2e; border-color: #238636; color: #3fb950; }
+  .toggle-btn.start:hover { background: #238636; color: #fff; }
+  .toggle-btn.stop { background: #4a0d0d; border-color: #b62324; color: #f85149; animation: pulse 2s infinite; }
+  .toggle-btn.stop:hover { background: #b62324; color: #fff; }
+
+  .log-panel {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 12px;
+    height: 280px;
+    overflow-y: auto;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .log-entry { display: flex; gap: 8px; align-items: flex-start; line-height: 1.5; }
+  .log-time { color: #484f58; flex-shrink: 0; }
+  .log-msg.INFO { color: #8b949e; }
+  .log-msg.SUCCESS { color: #3fb950; }
+  .log-msg.WARNING { color: #e3b341; }
+  .log-msg.ERROR { color: #f85149; }
+
+  .trades-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .trades-table th {
+    background: #0d1117; color: #8b949e;
+    padding: 8px; text-align: left;
+    border-bottom: 1px solid #30363d;
+    font-weight: 600;
+  }
+  .trades-table td { padding: 8px; border-bottom: 1px solid #21262d; }
+  .trades-table tr:hover td { background: #1c2128; }
+  .trade-buy { color: #58a6ff; font-weight: 600; }
+  .trade-sell { color: #f0883e; font-weight: 600; }
+  .trade-profit { color: #3fb950; }
+  .trade-loss { color: #f85149; }
+
+  .risk-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .risk-row label { color: #8b949e; font-size: 12px; width: 130px; flex-shrink: 0; }
+  .risk-row input { margin-bottom: 0; flex: 1; }
+
+  .tab-bar { display: flex; gap: 4px; margin-bottom: 12px; }
+  .tab {
+    padding: 6px 14px; border-radius: 6px; cursor: pointer;
+    font-size: 12px; font-weight: 600; color: #8b949e;
+    border: 1px solid transparent;
+    background: transparent;
+  }
+  .tab.active { background: #1f6feb22; border-color: #1f6feb; color: #58a6ff; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat-box { background: #0d1117; border-radius: 6px; padding: 12px; text-align: center; }
+  .stat-box .s-label { font-size: 11px; color: #8b949e; margin-bottom: 4px; }
+  .stat-box .s-value { font-size: 18px; font-weight: 700; }
+  .s-value.green { color: #3fb950; }
+  .s-value.red { color: #f85149; }
+  .s-value.blue { color: #58a6ff; }
+
+  .symbol-badge {
+    display: inline-block;
+    padding: 2px 8px; border-radius: 4px;
+    background: #1f6feb22; color: #58a6ff;
+    font-size: 11px; font-weight: 700;
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #0d1117; }
+  ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+
+  .section-divider { border: none; border-top: 1px solid #21262d; margin: 4px 0; }
+  .mt-8 { margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div style="display:flex;align-items:center;gap:12px;">
+    <h1>AI 자동매매 시스템</h1>
+    <span id="strategy-badge" class="badge">전략: 로딩 중...</span>
+    <span id="symbol-badge" class="badge" style="display:none;"></span>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <span id="connection-badge" class="badge">MT5 미연결</span>
+    <span id="trading-badge" class="badge">자동매매 OFF</span>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- MT5 연동 -->
+    <div class="card">
+      <div class="card-title">MT5 계좌 연동</div>
+      <input id="mt5-login" type="text" placeholder="계좌번호 (숫자)">
+      <input id="mt5-password" type="password" placeholder="비밀번호">
+      <input id="mt5-server" type="text" placeholder="서버 (예: MetaQuotes-Demo)">
+      <button class="btn btn-blue" onclick="connectMT5()">연결</button>
+      <button class="btn btn-gray mt-8" onclick="disconnectMT5()">연결 해제</button>
+    </div>
+
+    <!-- 계좌 정보 -->
+    <div class="card">
+      <div class="card-title">계좌 정보</div>
+      <div class="profit-display">
+        <div class="label">세션 손익</div>
+        <div class="amount zero" id="session-profit">$0.00</div>
+      </div>
+      <div class="account-info">
+        <div class="info-row">
+          <span class="info-label">잔고</span>
+          <span class="info-value" id="acc-balance">-</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">순자산</span>
+          <span class="info-value" id="acc-equity">-</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">평가손익</span>
+          <span class="info-value" id="acc-profit">-</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">계좌명</span>
+          <span class="info-value" id="acc-name" style="font-size:12px;color:#8b949e;">-</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 자동매매 ON/OFF -->
+    <div class="card">
+      <div class="card-title">자동매매 제어</div>
+      <button class="toggle-btn start" id="trading-toggle" onclick="toggleTrading()">
+        AI 자동매매 시작
+      </button>
+    </div>
+
+    <!-- 위험 관리 -->
+    <div class="card">
+      <div class="card-title">위험 관리</div>
+      <div style="margin-bottom:8px;">
+        <select id="risk-mode" onchange="toggleRiskMode()">
+          <option value="auto">자동 (계좌 잔고 기준)</option>
+          <option value="manual">수동 (직접 설정)</option>
+        </select>
+      </div>
+      <div id="manual-risk" style="display:none;">
+        <div class="risk-row">
+          <label>거래당 손실 %</label>
+          <input id="risk-per-trade" type="number" value="2" min="0.1" max="10" step="0.1" style="width:70px;">
+        </div>
+        <div class="risk-row">
+          <label>일일 손실 한도 %</label>
+          <input id="daily-loss" type="number" value="5" min="1" max="20" step="0.5" style="width:70px;">
+        </div>
+      </div>
+      <button class="btn btn-gray mt-8" onclick="updateRisk()">적용</button>
+    </div>
+
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+
+    <!-- 탭 -->
+    <div>
+      <div class="tab-bar">
+        <button class="tab active" onclick="showTab('tab-dashboard')">대시보드</button>
+        <button class="tab" onclick="showTab('tab-trades')">거래 내역</button>
+        <button class="tab" onclick="showTab('tab-backtest')">백테스트</button>
+        <button class="tab" onclick="showTab('tab-strategy')">전략 관리</button>
+      </div>
+
+      <!-- 대시보드 탭 -->
+      <div id="tab-dashboard" class="tab-content active">
+        <div class="stat-grid" style="margin-bottom:16px;">
+          <div class="stat-box">
+            <div class="s-label">오픈 포지션</div>
+            <div class="s-value blue" id="stat-positions">0</div>
+          </div>
+          <div class="stat-box">
+            <div class="s-label">총 거래 (세션)</div>
+            <div class="s-value" id="stat-total-trades">0</div>
+          </div>
+          <div class="stat-box">
+            <div class="s-label">승률 (세션)</div>
+            <div class="s-value green" id="stat-winrate">-</div>
+          </div>
+          <div class="stat-box">
+            <div class="s-label">세션 손익</div>
+            <div class="s-value" id="stat-profit">$0.00</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <div class="card-title" style="margin:0;">실시간 로그</div>
+            <button class="btn btn-gray btn-sm" onclick="clearLogs()">지우기</button>
+          </div>
+          <div class="log-panel" id="log-panel">
+            <div class="log-entry">
+              <span class="log-time">--:--:--</span>
+              <span class="log-msg INFO">시스템 초기화 완료. MT5 연결 후 자동매매를 시작하세요.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 오픈 포지션 -->
+        <div class="card">
+          <div class="card-title">오픈 포지션</div>
+          <div id="positions-container">
+            <div style="color:#484f58;text-align:center;padding:20px;">포지션 없음</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 거래 내역 탭 -->
+      <div id="tab-trades" class="tab-content">
+        <div class="card">
+          <div class="card-title">거래 내역</div>
+          <div style="overflow-x:auto;">
+            <table class="trades-table" id="trades-table">
+              <thead>
+                <tr>
+                  <th>시간</th>
+                  <th>종목</th>
+                  <th>방향</th>
+                  <th>Lot</th>
+                  <th>진입가</th>
+                  <th>손절가</th>
+                  <th>목표가</th>
+                  <th>손익</th>
+                  <th>상태</th>
+                </tr>
+              </thead>
+              <tbody id="trades-body">
+                <tr><td colspan="9" style="text-align:center;color:#484f58;padding:20px;">거래 내역 없음</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 백테스트 탭 -->
+      <div id="tab-backtest" class="tab-content">
+        <div class="card">
+          <div class="card-title">백테스트 설정</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;">
+            <div>
+              <div style="font-size:11px;color:#8b949e;margin-bottom:4px;">종목</div>
+              <select id="bt-symbol">
+                <option value="XAUUSD">XAUUSD (금)</option>
+                <option value="BTCUSD">BTCUSD (비트코인)</option>
+                <option value="ETHUSD">ETHUSD (이더리움)</option>
+                <option value="XAGUSD">XAGUSD (은)</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:11px;color:#8b949e;margin-bottom:4px;">기간 (일)</div>
+              <select id="bt-days">
+                <option value="7">7일</option>
+                <option value="14">14일</option>
+                <option value="30" selected>30일</option>
+                <option value="60">60일</option>
+                <option value="90">90일</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:11px;color:#8b949e;margin-bottom:4px;">초기 자금 ($)</div>
+              <input id="bt-balance" type="number" value="10000" style="margin:0;">
+            </div>
+          </div>
+          <button class="btn btn-blue" onclick="runBacktest()" id="bt-btn">백테스트 실행</button>
+        </div>
+
+        <div id="bt-results" style="display:none;">
+          <div class="stat-grid" style="margin-bottom:16px;">
+            <div class="stat-box">
+              <div class="s-label">총 수익률</div>
+              <div class="s-value" id="bt-return">-</div>
+            </div>
+            <div class="stat-box">
+              <div class="s-label">승률</div>
+              <div class="s-value green" id="bt-winrate">-</div>
+            </div>
+            <div class="stat-box">
+              <div class="s-label">총 거래 수</div>
+              <div class="s-value blue" id="bt-trades">-</div>
+            </div>
+            <div class="stat-box">
+              <div class="s-label">최대 낙폭</div>
+              <div class="s-value red" id="bt-mdd">-</div>
+            </div>
+            <div class="stat-box">
+              <div class="s-label">수익 팩터</div>
+              <div class="s-value" id="bt-pf">-</div>
+            </div>
+            <div class="stat-box">
+              <div class="s-label">최종 잔고</div>
+              <div class="s-value" id="bt-final">-</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">백테스트 거래 내역 (최근 20건)</div>
+            <div style="overflow-x:auto;">
+              <table class="trades-table" id="bt-trades-table">
+                <thead>
+                  <tr><th>시간</th><th>방향</th><th>진입가</th><th>청산가</th><th>손익</th><th>결과</th></tr>
+                </thead>
+                <tbody id="bt-trades-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 전략 관리 탭 -->
+      <div id="tab-strategy" class="tab-content">
+        <div class="card">
+          <div class="card-title">전략 교체 가이드</div>
+          <div style="background:#0d1117;border-radius:6px;padding:14px;font-size:12px;line-height:1.8;color:#8b949e;">
+            <p style="color:#58a6ff;font-weight:600;margin-bottom:8px;">새로운 매매 전략으로 교체하는 방법:</p>
+            <p>1. <code style="color:#e3b341;">strategies/scalping_strategy.py</code> 파일을 여세요.</p>
+            <p>2. 파일 전체 내용을 삭제하세요.</p>
+            <p>3. Claude AI에게 다음과 같이 요청하세요:</p>
+            <p style="background:#161b22;padding:10px;border-radius:4px;border-left:3px solid #58a6ff;margin:8px 0;color:#e6edf3;">
+              "다음 트레이더 기술을 Python으로 구현해줘.<br>
+              BaseStrategy 클래스를 상속받아야 하고,<br>
+              analyze() 메서드를 구현해줘: [전략 설명 붙여넣기]"
+            </p>
+            <p>4. 받은 코드를 <code style="color:#e3b341;">scalping_strategy.py</code>에 붙여넣으세요.</p>
+            <p>5. 아래 '전략 다시 로드' 버튼을 누르세요. 끝!</p>
+          </div>
+          <button class="btn btn-blue mt-8" onclick="reloadStrategy()">전략 다시 로드</button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">현재 전략 정보</div>
+          <div class="account-info">
+            <div class="info-row">
+              <span class="info-label">전략 이름</span>
+              <span class="info-value" id="strategy-name">-</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">파일 경로</span>
+              <span class="info-value" style="color:#8b949e;font-size:12px;">strategies/scalping_strategy.py</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const socket = io();
+let isTrading = false;
+let isConnected = false;
+
+socket.on('connect', () => {
+  addLog('시스템 연결됨', 'SUCCESS');
+});
+
+socket.on('log', (entry) => {
+  addLog(entry.message, entry.level);
+});
+
+socket.on('status', (data) => {
+  updateUI(data);
+});
+
+function addLog(message, level = 'INFO') {
+  const panel = document.getElementById('log-panel');
+  const now = new Date().toTimeString().slice(0, 8);
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-time">${now}</span><span class="log-msg ${level}">${message}</span>`;
+  panel.appendChild(entry);
+  panel.scrollTop = panel.scrollHeight;
+  // 최대 200줄 유지
+  while (panel.children.length > 200) panel.removeChild(panel.firstChild);
+}
+
+function clearLogs() {
+  document.getElementById('log-panel').innerHTML = '';
+}
+
+async function connectMT5() {
+  const login = document.getElementById('mt5-login').value.trim();
+  const password = document.getElementById('mt5-password').value;
+  const server = document.getElementById('mt5-server').value.trim();
+  if (!login || !password || !server) { alert('모든 계좌 정보를 입력해주세요.'); return; }
+
+  addLog('MT5 연결 중...', 'INFO');
+  const res = await fetch('/api/connect', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({login, password, server})
+  });
+  const data = await res.json();
+  if (data.success) {
+    isConnected = true;
+    document.getElementById('connection-badge').textContent = 'MT5 연결됨';
+    document.getElementById('connection-badge').className = 'badge connected';
+    updateAccountInfo(data.account);
+    addLog('MT5 연결 성공', 'SUCCESS');
+  } else {
+    addLog(`연결 실패: ${data.message}`, 'ERROR');
+  }
+}
+
+async function disconnectMT5() {
+  await fetch('/api/disconnect', {method: 'POST'});
+  isConnected = false;
+  document.getElementById('connection-badge').textContent = 'MT5 미연결';
+  document.getElementById('connection-badge').className = 'badge';
+  addLog('MT5 연결 해제', 'WARNING');
+}
+
+async function toggleTrading() {
+  if (!isConnected) { addLog('MT5 먼저 연결해주세요.', 'WARNING'); return; }
+  const btn = document.getElementById('trading-toggle');
+
+  if (!isTrading) {
+    const res = await fetch('/api/start', {method: 'POST'});
+    const data = await res.json();
+    if (data.success) {
+      isTrading = true;
+      btn.className = 'toggle-btn stop';
+      btn.textContent = 'AI 자동매매 중단';
+      document.getElementById('trading-badge').textContent = '자동매매 ON';
+      document.getElementById('trading-badge').className = 'badge active';
+    } else {
+      addLog(`시작 실패: ${data.message}`, 'ERROR');
+    }
+  } else {
+    await fetch('/api/stop', {method: 'POST'});
+    isTrading = false;
+    btn.className = 'toggle-btn start';
+    btn.textContent = 'AI 자동매매 시작';
+    document.getElementById('trading-badge').textContent = '자동매매 OFF';
+    document.getElementById('trading-badge').className = 'badge';
+  }
+}
+
+function toggleRiskMode() {
+  const mode = document.getElementById('risk-mode').value;
+  document.getElementById('manual-risk').style.display = mode === 'manual' ? 'block' : 'none';
+}
+
+async function updateRisk() {
+  const mode = document.getElementById('risk-mode').value;
+  const body = { mode };
+  if (mode === 'manual') {
+    body.risk_per_trade = parseFloat(document.getElementById('risk-per-trade').value) / 100;
+    body.daily_loss_limit = parseFloat(document.getElementById('daily-loss').value) / 100;
+  }
+  await fetch('/api/risk', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  addLog(`위험 관리 설정 업데이트: ${mode === 'auto' ? '자동' : '수동'} 모드`, 'SUCCESS');
+}
+
+async function reloadStrategy() {
+  const res = await fetch('/api/reload_strategy', {method: 'POST'});
+  const data = await res.json();
+  addLog(data.success ? '전략 다시 로드 완료' : '전략 로드 실패', data.success ? 'SUCCESS' : 'ERROR');
+  refreshStatus();
+}
+
+async function runBacktest() {
+  const btn = document.getElementById('bt-btn');
+  btn.textContent = '실행 중...';
+  btn.disabled = true;
+  addLog('백테스트 실행 중...', 'INFO');
+
+  const res = await fetch('/api/backtest', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      symbol: document.getElementById('bt-symbol').value,
+      days: parseInt(document.getElementById('bt-days').value),
+      balance: parseFloat(document.getElementById('bt-balance').value),
+    })
+  });
+  const data = await res.json();
+  btn.textContent = '백테스트 실행';
+  btn.disabled = false;
+
+  if (data.error) { addLog(`백테스트 오류: ${data.error}`, 'ERROR'); return; }
+
+  document.getElementById('bt-results').style.display = 'block';
+  const ret = data.return_pct || 0;
+  const retEl = document.getElementById('bt-return');
+  retEl.textContent = `${ret >= 0 ? '+' : ''}${ret}%`;
+  retEl.className = `s-value ${ret >= 0 ? 'green' : 'red'}`;
+  document.getElementById('bt-winrate').textContent = `${data.win_rate}%`;
+  document.getElementById('bt-trades').textContent = data.total_trades;
+  document.getElementById('bt-mdd').textContent = `${data.max_drawdown_pct}%`;
+  document.getElementById('bt-pf').textContent = data.profit_factor;
+  document.getElementById('bt-final').textContent = `$${(data.final_balance||0).toLocaleString()}`;
+
+  const tbody = document.getElementById('bt-trades-body');
+  tbody.innerHTML = '';
+  (data.trades || []).slice().reverse().forEach(t => {
+    const row = document.createElement('tr');
+    const profit = t.profit || 0;
+    row.innerHTML = `
+      <td>${(t.time||'').slice(0,16)}</td>
+      <td class="${t.action==='BUY'?'trade-buy':'trade-sell'}">${t.action}</td>
+      <td>${(t.entry||0).toFixed(2)}</td>
+      <td>${(t.exit_price||0).toFixed(2)}</td>
+      <td class="${profit>=0?'trade-profit':'trade-loss'}">${profit>=0?'+':''}$${profit.toFixed(2)}</td>
+      <td>${t.result||'-'}</td>
+    `;
+    tbody.appendChild(row);
+  });
+
+  addLog(`백테스트 완료: ${data.total_trades}건 | 승률 ${data.win_rate}% | ${ret>=0?'+':''}${ret}%`, 'SUCCESS');
+}
+
+function updateAccountInfo(account) {
+  if (!account) return;
+  const bal = account.balance || 0;
+  const eq = account.equity || 0;
+  const pnl = account.profit || 0;
+  document.getElementById('acc-balance').textContent = `$${bal.toLocaleString(undefined,{minimumFractionDigits:2})}`;
+  document.getElementById('acc-equity').textContent = `$${eq.toLocaleString(undefined,{minimumFractionDigits:2})}`;
+  const profitEl = document.getElementById('acc-profit');
+  profitEl.textContent = `${pnl>=0?'+':''}$${pnl.toFixed(2)}`;
+  profitEl.className = `info-value ${pnl>0?'profit':pnl<0?'loss':''}`;
+  document.getElementById('acc-name').textContent = account.name || '-';
+}
+
+function updateUI(data) {
+  if (!data) return;
+
+  isTrading = data.active;
+  isConnected = data.connected;
+
+  document.getElementById('connection-badge').textContent = isConnected ? 'MT5 연결됨' : 'MT5 미연결';
+  document.getElementById('connection-badge').className = `badge ${isConnected ? 'connected' : ''}`;
+  document.getElementById('trading-badge').textContent = isTrading ? '자동매매 ON' : '자동매매 OFF';
+  document.getElementById('trading-badge').className = `badge ${isTrading ? 'active' : ''}`;
+
+  const btn = document.getElementById('trading-toggle');
+  if (isTrading) {
+    btn.className = 'toggle-btn stop';
+    btn.textContent = 'AI 자동매매 중단';
+  } else {
+    btn.className = 'toggle-btn start';
+    btn.textContent = 'AI 자동매매 시작';
+  }
+
+  updateAccountInfo(data.account);
+
+  const profit = data.session_profit || 0;
+  const profitEl = document.getElementById('session-profit');
+  profitEl.textContent = `${profit>=0?'+':''}$${profit.toFixed(2)}`;
+  profitEl.className = `amount ${profit>0?'positive':profit<0?'negative':'zero'}`;
+
+  const statProfit = document.getElementById('stat-profit');
+  statProfit.textContent = `${profit>=0?'+':''}$${profit.toFixed(2)}`;
+  statProfit.className = `s-value ${profit>0?'green':profit<0?'red':''}`;
+
+  const positions = data.open_positions || [];
+  document.getElementById('stat-positions').textContent = positions.length;
+
+  const trades = data.trade_history || [];
+  document.getElementById('stat-total-trades').textContent = trades.length;
+
+  if (trades.length > 0) {
+    const closed = trades.filter(t => t.status === 'CLOSED');
+    if (closed.length > 0) {
+      const wins = closed.filter(t => t.profit > 0).length;
+      document.getElementById('stat-winrate').textContent = `${(wins/closed.length*100).toFixed(0)}%`;
+    }
+  }
+
+  const strategy = data.strategy || '-';
+  document.getElementById('strategy-badge').textContent = `전략: ${strategy}`;
+  document.getElementById('strategy-name').textContent = strategy;
+
+  if (data.current_symbol) {
+    const sb = document.getElementById('symbol-badge');
+    sb.style.display = 'inline-block';
+    sb.textContent = data.current_symbol;
+  }
+
+  // 포지션 테이블
+  const posContainer = document.getElementById('positions-container');
+  if (positions.length === 0) {
+    posContainer.innerHTML = '<div style="color:#484f58;text-align:center;padding:20px;">포지션 없음</div>';
+  } else {
+    posContainer.innerHTML = `<table class="trades-table"><thead><tr><th>종목</th><th>방향</th><th>Lot</th><th>진입가</th><th>현재가</th><th>손익</th></tr></thead><tbody>
+      ${positions.map(p => `<tr>
+        <td>${p.symbol}</td>
+        <td class="${p.type==='BUY'?'trade-buy':'trade-sell'}">${p.type}</td>
+        <td>${p.volume}</td>
+        <td>${p.open_price}</td>
+        <td>${p.current_price}</td>
+        <td class="${p.profit>=0?'trade-profit':'trade-loss'}">${p.profit>=0?'+':''}$${(p.profit||0).toFixed(2)}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+  }
+
+  // 거래 내역
+  const tbody = document.getElementById('trades-body');
+  if (trades.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#484f58;padding:20px;">거래 내역 없음</td></tr>';
+  } else {
+    tbody.innerHTML = trades.slice().reverse().map(t => `<tr>
+      <td>${(t.time||'').slice(11,16)}</td>
+      <td><span class="symbol-badge">${t.symbol||'-'}</span></td>
+      <td class="${t.action==='BUY'?'trade-buy':'trade-sell'}">${t.action}</td>
+      <td>${t.lot}</td>
+      <td>${(t.entry_price||0).toFixed(2)}</td>
+      <td>${(t.sl||0).toFixed(2)}</td>
+      <td>${(t.tp||0).toFixed(2)}</td>
+      <td class="${(t.profit||0)>=0?'trade-profit':'trade-loss'}">${(t.profit||0)>=0?'+':''}$${(t.profit||0).toFixed(2)}</td>
+      <td>${t.status||'OPEN'}</td>
+    </tr>`).join('');
+  }
+}
+
+async function refreshStatus() {
+  const res = await fetch('/api/status');
+  const data = await res.json();
+  updateUI(data);
+}
+
+function showTab(id) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// 5초마다 상태 갱신
+setInterval(refreshStatus, 5000);
+refreshStatus();
+</script>
+</body>
+</html>
