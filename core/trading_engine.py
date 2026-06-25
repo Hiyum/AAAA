@@ -97,20 +97,27 @@ class TradingEngine:
                 for sym in Config.PRIORITY_SYMBOLS:
                     self.log(f"{sym} 분석 중...")
                     price = self.mt5.get_current_price(sym)
+                    if price is None:
+                        self.log(f"{sym} 가격 조회 실패 - 브로커에서 지원하지 않는 종목일 수 있음", "WARNING")
+                        continue
                     df = self.mt5.get_ohlcv(sym, "M5", 100)
-                    if price and df is not None:
-                        atr = df['close'].diff().abs().rolling(14).mean().iloc[-1]
-                        change_pct = (df['close'].iloc[-1] - df['close'].iloc[-24]) / df['close'].iloc[-24] * 100
-                        market_data[sym] = {
-                            "current_price": price,
-                            "atr": round(atr, 5),
-                            "change_pct": round(change_pct, 2),
-                            "volume": int(df['volume'].iloc[-1]),
-                        }
+                    if df is None:
+                        self.log(f"{sym} 차트 데이터 조회 실패", "WARNING")
+                        continue
+                    atr = df['close'].diff().abs().rolling(14).mean().iloc[-1]
+                    change_pct = (df['close'].iloc[-1] - df['close'].iloc[-24]) / df['close'].iloc[-24] * 100
+                    market_data[sym] = {
+                        "current_price": price,
+                        "atr": round(atr, 5),
+                        "change_pct": round(change_pct, 2),
+                        "volume": int(df['volume'].iloc[-1]),
+                    }
 
                 if not market_data:
-                    self.log("시장 데이터 조회 실패 - 재시도 중...", "WARNING")
-                    time.sleep(10)
+                    self.log("모든 종목 데이터 조회 실패 - MT5 터미널이 실행 중인지, 종목명이 맞는지 확인하세요", "ERROR")
+                    self.log(f"현재 설정된 종목: {Config.PRIORITY_SYMBOLS}", "INFO")
+                    self.log("config.py 의 PRIORITY_SYMBOLS 에서 브로커 종목명으로 변경하세요", "INFO")
+                    time.sleep(30)
                     continue
 
                 self.log("최적 종목 선정 중... (Claude AI 분석)")
