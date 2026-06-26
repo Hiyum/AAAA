@@ -27,6 +27,8 @@ class TradingEngine:
         self.strategy = None
         self.current_symbol = None
         self.trade_history = []
+        self.max_open_positions = 1   # 동시 최대 포지션 수
+        self.monitor_interval = 30    # 포지션 주시 간격 (초)
 
     def log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -88,17 +90,22 @@ class TradingEngine:
 
     def _position_monitor_loop(self):
         """
-        열린 포지션을 10초마다 Claude AI가 주시.
-        시장 상황 변화에 따라 홀드/청산/손절이동 결정.
+        열린 포지션을 주기적으로 Claude AI가 주시.
+        포지션이 여러 개여도 AI 호출은 한 번에 하나씩.
         """
         while self.active:
             try:
                 positions = self.mt5.get_open_positions()
                 if not positions:
-                    time.sleep(10)
+                    time.sleep(self.monitor_interval)
                     continue
 
+                self.log(f"[포지션 주시] 열린 포지션 {len(positions)}개 점검 중...")
+
                 for pos in positions:
+                    if not self.active:
+                        break
+
                     symbol = pos["symbol"]
                     ticket = pos["ticket"]
                     action = pos["type"]
@@ -111,12 +118,10 @@ class TradingEngine:
                     profit_sign = "+" if profit >= 0 else ""
                     self.log(f"[포지션 주시] #{ticket} {symbol} {action} | 진입:{entry} → 현재:{current} | 손익:{profit_sign}{profit:.2f}$")
 
-                    # 차트 데이터 가져오기
                     df = self.mt5.get_ohlcv(symbol, "M5", 100)
                     if df is None:
                         continue
 
-                    # Claude AI에게 포지션 관리 판단 요청
                     decision = self.ai.manage_position(
                         symbol=symbol,
                         action=action,
@@ -144,11 +149,11 @@ class TradingEngine:
                         self.log(f"[손절 이동] #{ticket} SL: {sl} → {new_sl}")
                         self.mt5.modify_position(ticket, new_sl, tp)
 
-                time.sleep(10)
+                time.sleep(self.monitor_interval)
 
             except Exception as e:
                 self.log(f"[포지션 주시 오류] {e}", "ERROR")
-                time.sleep(10)
+                time.sleep(self.monitor_interval)
 
     def _record_closed(self, ticket: int, profit: float):
         for t in self.trade_history:
@@ -172,6 +177,13 @@ class TradingEngine:
                 if not can_trade["allowed"]:
                     self.log(f"거래 중단: {can_trade['reason']}", "WARNING")
                     time.sleep(60)
+                    continue
+
+                # 최대 포지션 수 초과 시 신규 진입 차단
+                open_positions = self.mt5.get_open_positions()
+                if len(open_positions) >= self.max_open_positions:
+                    self.log(f"포지션 {len(open_positions)}개 진행 중 (최대 {self.max_open_positions}개) - 신규 진입 대기")
+                    time.sleep(30)
                     continue
 
                 market_data = {}
