@@ -22,16 +22,15 @@ class TradingEngine:
         self.log_callback = log_callback or print
 
         self.active = False
-        self.thread: Optional[threading.Thread] = None
+        self.scan_thread: Optional[threading.Thread] = None
+        self.monitor_thread: Optional[threading.Thread] = None
         self.strategy = None
         self.current_symbol = None
         self.trade_history = []
-        self.session_profit = 0.0
 
     def log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%H:%M:%S")
-        full_msg = f"[{timestamp}] {message}"
-        logger.info(full_msg)
+        logger.info(message)
         self.log_callback({"time": timestamp, "message": message, "level": level})
 
     def load_strategy(self, symbol: str = None):
@@ -68,9 +67,16 @@ class TradingEngine:
         self.load_strategy()
 
         self.active = True
-        self.thread = threading.Thread(target=self._trading_loop, daemon=True)
-        self.thread.start()
-        self.log("AI 자동매매 시작", "SUCCESS")
+
+        # 진입 탐색 스레드
+        self.scan_thread = threading.Thread(target=self._scanning_loop, daemon=True)
+        self.scan_thread.start()
+
+        # 포지션 주시 스레드
+        self.monitor_thread = threading.Thread(target=self._position_monitor_loop, daemon=True)
+        self.monitor_thread.start()
+
+        self.log("AI 자동매매 시작 (진입 탐색 + 포지션 주시 동시 실행)", "SUCCESS")
         return {"success": True, "message": "AI 자동매매 시작됨"}
 
     def stop(self):
@@ -78,7 +84,82 @@ class TradingEngine:
         self.log("AI 자동매매 중단", "WARNING")
         return {"success": True, "message": "자동매매 중단됨"}
 
-    def _trading_loop(self):
+    # ── 포지션 주시 루프 (핵심 추가 기능) ──────────────────────
+
+    def _position_monitor_loop(self):
+        """
+        열린 포지션을 10초마다 Claude AI가 주시.
+        시장 상황 변화에 따라 홀드/청산/손절이동 결정.
+        """
+        while self.active:
+            try:
+                positions = self.mt5.get_open_positions()
+                if not positions:
+                    time.sleep(10)
+                    continue
+
+                for pos in positions:
+                    symbol = pos["symbol"]
+                    ticket = pos["ticket"]
+                    action = pos["type"]
+                    entry = pos["open_price"]
+                    current = pos["current_price"]
+                    profit = pos["profit"]
+                    sl = pos["sl"]
+                    tp = pos["tp"]
+
+                    profit_sign = "+" if profit >= 0 else ""
+                    self.log(f"[포지션 주시] #{ticket} {symbol} {action} | 진입:{entry} → 현재:{current} | 손익:{profit_sign}{profit:.2f}$")
+
+                    # 차트 데이터 가져오기
+                    df = self.mt5.get_ohlcv(symbol, "M5", 100)
+                    if df is None:
+                        continue
+
+                    # Claude AI에게 포지션 관리 판단 요청
+                    decision = self.ai.manage_position(
+                        symbol=symbol,
+                        action=action,
+                        entry_price=entry,
+                        current_price=current,
+                        sl=sl,
+                        tp=tp,
+                        profit=profit,
+                        df=df,
+                    )
+
+                    self.log(f"[AI 포지션 판단] {decision['action']} | {decision['reason']}")
+
+                    if decision["action"] == "CLOSE":
+                        self.log(f"[AI 청산 결정] #{ticket} 포지션 청산 중...", "WARNING")
+                        result = self.mt5.close_position(ticket)
+                        if result["success"]:
+                            self.log(f"[청산 완료] #{ticket} | 최종 손익: {profit_sign}{profit:.2f}$", "SUCCESS")
+                            self._record_closed(ticket, profit)
+                        else:
+                            self.log(f"[청산 실패] {result.get('message')}", "ERROR")
+
+                    elif decision["action"] == "MOVE_SL" and decision.get("new_sl"):
+                        new_sl = decision["new_sl"]
+                        self.log(f"[손절 이동] #{ticket} SL: {sl} → {new_sl}")
+                        self.mt5.modify_position(ticket, new_sl, tp)
+
+                time.sleep(10)
+
+            except Exception as e:
+                self.log(f"[포지션 주시 오류] {e}", "ERROR")
+                time.sleep(10)
+
+    def _record_closed(self, ticket: int, profit: float):
+        for t in self.trade_history:
+            if t.get("ticket") == ticket:
+                t["status"] = "CLOSED"
+                t["profit"] = round(profit, 2)
+                break
+
+    # ── 진입 탐색 루프 ──────────────────────────────────────────
+
+    def _scanning_loop(self):
         scan_count = 0
         while self.active:
             try:
@@ -102,7 +183,6 @@ class TradingEngine:
                         continue
                     df = self.mt5.get_ohlcv(sym, "M5", 100)
                     if df is None:
-                        self.log(f"{sym} 차트 데이터 조회 실패", "WARNING")
                         continue
                     atr = df['close'].diff().abs().rolling(14).mean().iloc[-1]
                     change_pct = (df['close'].iloc[-1] - df['close'].iloc[-24]) / df['close'].iloc[-24] * 100
@@ -114,9 +194,7 @@ class TradingEngine:
                     }
 
                 if not market_data:
-                    self.log("모든 종목 데이터 조회 실패 - MT5 터미널이 실행 중인지, 종목명이 맞는지 확인하세요", "ERROR")
-                    self.log(f"현재 설정된 종목: {Config.PRIORITY_SYMBOLS}", "INFO")
-                    self.log("config.py 의 PRIORITY_SYMBOLS 에서 브로커 종목명으로 변경하세요", "INFO")
+                    self.log("시장 데이터 조회 실패 - 재시도 중...", "WARNING")
                     time.sleep(30)
                     continue
 
@@ -129,7 +207,6 @@ class TradingEngine:
                 price = self.mt5.get_current_price(best_symbol)
 
                 if df is None or price is None:
-                    self.log(f"{best_symbol} 데이터 없음", "WARNING")
                     time.sleep(10)
                     continue
 
@@ -172,7 +249,7 @@ class TradingEngine:
                             price,
                             ai_decision.get("stop_loss", signal.stop_loss),
                             ai_decision.get("take_profit", signal.take_profit),
-                            comment=f"ClaudeAI"
+                            comment="ClaudeAI"
                         )
 
                         if result["success"]:

@@ -112,6 +112,71 @@ class ClaudeAI:
             logger.error(f"종목 선택 오류: {e}")
             return symbols[0]
 
+    def manage_position(self, symbol: str, action: str, entry_price: float,
+                        current_price: float, sl: float, tp: float,
+                        profit: float, df) -> Dict[str, Any]:
+        """열린 포지션을 분석해서 홀드/청산/손절이동 결정"""
+
+        pnl_pct = ((current_price - entry_price) / entry_price * 100)
+        if action == "SELL":
+            pnl_pct = -pnl_pct
+
+        # AI 없으면 기본 규칙으로 판단
+        if not self.available:
+            # 수익 50% 이상 달성 시 손절을 진입가로 이동 (본전 보호)
+            if pnl_pct > 0.5 and action == "BUY" and sl < entry_price:
+                return {"action": "MOVE_SL", "new_sl": round(entry_price, 5),
+                        "reason": "수익 발생 - 손절을 진입가로 이동 (본전 보호)"}
+            # 시장이 완전히 반전된 경우 조기 청산
+            recent_close = float(df['close'].iloc[-1])
+            if action == "BUY" and recent_close < sl * 1.002:
+                return {"action": "CLOSE", "reason": "손절가 근접 - 조기 청산"}
+            if action == "SELL" and recent_close > sl * 0.998:
+                return {"action": "CLOSE", "reason": "손절가 근접 - 조기 청산"}
+            return {"action": "HOLD", "reason": f"포지션 유지 중 | 손익: {pnl_pct:+.2f}%"}
+
+        # 최근 캔들 요약
+        recent = df.tail(5)[['open', 'high', 'low', 'close']].round(5).to_dict('records')
+
+        prompt = f"""당신은 열린 포지션을 관리하는 전문 트레이더 AI입니다.
+
+현재 포지션:
+- 종목: {symbol}
+- 방향: {action}
+- 진입가: {entry_price}
+- 현재가: {current_price}
+- 손절가: {sl}
+- 목표가: {tp}
+- 현재 손익: ${profit:.2f} ({pnl_pct:+.2f}%)
+
+최근 5개 캔들 (5분봉):
+{json.dumps(recent, ensure_ascii=False)}
+
+다음 중 하나를 JSON으로만 응답하세요:
+
+1. 포지션 유지:
+{{"action": "HOLD", "reason": "이유"}}
+
+2. 지금 청산:
+{{"action": "CLOSE", "reason": "이유"}}
+
+3. 손절가 이동 (수익 보호):
+{{"action": "MOVE_SL", "new_sl": 숫자, "reason": "이유"}}"""
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            text = response.content[0].text.strip()
+            if "```" in text:
+                text = text.split("```")[1].replace("json", "").strip()
+            return json.loads(text)
+        except Exception as e:
+            logger.error(f"포지션 관리 판단 오류: {e}")
+            return {"action": "HOLD", "reason": f"AI 오류 - 홀드 유지: {str(e)[:30]}"}
+
     def summarize_performance(self, trades: List[Dict]) -> str:
         if not self.available or not trades:
             return "거래 내역 없음"

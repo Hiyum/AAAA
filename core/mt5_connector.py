@@ -248,3 +248,27 @@ class MT5Connector:
             return {"success": False, "message": f"청산 실패: {result.comment}"}
 
         return {"success": True, "ticket": ticket, "profit": pos.profit}
+
+    def modify_position(self, ticket: int, new_sl: float, new_tp: float) -> Dict[str, Any]:
+        """손절가/목표가 수정"""
+        if self.simulation_mode:
+            return {"success": True, "ticket": ticket, "simulation": True}
+
+        position = mt5.positions_get(ticket=ticket)
+        if not position:
+            return {"success": False, "message": "포지션 없음"}
+
+        pos = position[0]
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": pos.symbol,
+            "position": ticket,
+            "sl": new_sl,
+            "tp": new_tp,
+        }
+        result = mt5.order_send(request)
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            err = result.comment if result else str(mt5.last_error())
+            return {"success": False, "message": f"수정 실패: {err}"}
+
+        return {"success": True, "ticket": ticket, "new_sl": new_sl, "new_tp": new_tp}
