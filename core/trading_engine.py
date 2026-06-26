@@ -172,7 +172,7 @@ class TradingEngine:
                             price,
                             ai_decision.get("stop_loss", signal.stop_loss),
                             ai_decision.get("take_profit", signal.take_profit),
-                            comment=f"Claude AI | {signal.reason[:30]}"
+                            comment=f"ClaudeAI"
                         )
 
                         if result["success"]:
