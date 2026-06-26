@@ -24,6 +24,7 @@ class TradingEngine:
         self.active = False
         self.scan_thread: Optional[threading.Thread] = None
         self.monitor_thread: Optional[threading.Thread] = None
+        self.watchdog_thread: Optional[threading.Thread] = None
         self.strategy = None
         self.current_symbol = None
         self.trade_history = []
@@ -77,6 +78,10 @@ class TradingEngine:
         # 포지션 주시 스레드
         self.monitor_thread = threading.Thread(target=self._position_monitor_loop, daemon=True)
         self.monitor_thread.start()
+
+        # 스레드 감시 (watchdog)
+        self.watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
+        self.watchdog_thread.start()
 
         self.log("AI 자동매매 시작 (진입 탐색 + 포지션 주시 동시 실행)", "SUCCESS")
         return {"success": True, "message": "AI 자동매매 시작됨"}
@@ -154,6 +159,24 @@ class TradingEngine:
             except Exception as e:
                 self.log(f"[포지션 주시 오류] {e}", "ERROR")
                 time.sleep(self.monitor_interval)
+
+    def _watchdog_loop(self):
+        """스캔/모니터 스레드가 죽으면 자동 재시작"""
+        time.sleep(60)  # 시작 후 1분은 대기
+        while self.active:
+            try:
+                if not self.scan_thread.is_alive():
+                    self.log("[Watchdog] 스캔 스레드 중단 감지 - 재시작 중...", "WARNING")
+                    self.scan_thread = threading.Thread(target=self._scanning_loop, daemon=True)
+                    self.scan_thread.start()
+
+                if not self.monitor_thread.is_alive():
+                    self.log("[Watchdog] 모니터 스레드 중단 감지 - 재시작 중...", "WARNING")
+                    self.monitor_thread = threading.Thread(target=self._position_monitor_loop, daemon=True)
+                    self.monitor_thread.start()
+            except Exception as e:
+                logger.error(f"Watchdog 오류: {e}")
+            time.sleep(30)
 
     def _record_closed(self, ticket: int, profit: float):
         for t in self.trade_history:
@@ -294,7 +317,10 @@ class TradingEngine:
                     time.sleep(1)
 
             except Exception as e:
-                self.log(f"엔진 오류: {e}", "ERROR")
+                try:
+                    self.log(f"엔진 오류: {e}", "ERROR")
+                except Exception:
+                    logger.error(f"엔진 오류 (로그 실패): {e}")
                 time.sleep(15)
 
     def get_status(self) -> Dict[str, Any]:

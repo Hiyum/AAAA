@@ -166,13 +166,25 @@ class ClaudeAI:
         try:
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=200,
+                max_tokens=400,
                 messages=[{"role": "user", "content": prompt}]
             )
             text = response.content[0].text.strip()
             if "```" in text:
                 text = text.split("```")[1].replace("json", "").strip()
+            # 불완전한 JSON 복구 시도
+            if not text.endswith("}"):
+                text = text[:text.rfind('"')] + '"}'  # 마지막 완전한 필드까지만 사용
             return json.loads(text)
+        except json.JSONDecodeError:
+            # JSON 파싱 실패 시 텍스트에서 action 키워드 직접 추출
+            import re
+            text_lower = text.lower() if 'text' in dir() else ""
+            if '"action": "close"' in text_lower or "'close'" in text_lower:
+                return {"action": "CLOSE", "reason": "AI 응답 파싱 오류 - CLOSE 감지"}
+            if '"action": "move_sl"' in text_lower:
+                return {"action": "HOLD", "reason": "AI 응답 파싱 오류 - 홀드 유지"}
+            return {"action": "HOLD", "reason": "AI 응답 파싱 오류 - 홀드 유지"}
         except Exception as e:
             logger.error(f"포지션 관리 판단 오류: {e}")
             return {"action": "HOLD", "reason": f"AI 오류 - 홀드 유지: {str(e)[:30]}"}
