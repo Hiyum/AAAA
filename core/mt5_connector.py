@@ -34,11 +34,14 @@ class MT5Connector:
             }
             return {"success": True, "message": "시뮬레이션 모드로 연결됨", "account": self.account_info}
 
-        if not mt5.initialize():
-            return {"success": False, "message": f"MT5 초기화 실패: {mt5.last_error()}"}
-
-        if not mt5.login(int(login), password=password, server=server):
-            return {"success": False, "message": f"MT5 로그인 실패: {mt5.last_error()}"}
+        # 먼저 로그인 정보와 함께 초기화 시도
+        if not mt5.initialize(login=int(login), password=password, server=server):
+            # 실패 시 일반 초기화 후 별도 로그인 시도
+            mt5.shutdown()
+            if not mt5.initialize():
+                return {"success": False, "message": f"MT5 초기화 실패: {mt5.last_error()} - MT5 터미널이 실행 중인지 확인하세요"}
+            if not mt5.login(int(login), password=password, server=server):
+                return {"success": False, "message": f"MT5 로그인 실패: {mt5.last_error()} - 계좌번호/비밀번호/서버를 확인하세요"}
 
         info = mt5.account_info()
         if info is None:
