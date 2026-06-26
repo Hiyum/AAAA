@@ -161,8 +161,11 @@ class MT5Connector:
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
         result = mt5.order_send(request)
+        if result is None:
+            error = mt5.last_error()
+            return {"success": False, "message": f"MT5 주문 응답 없음 (오류코드: {error}) - MT5 터미널 자동매매 허용 여부 및 종목이 Market Watch에 있는지 확인하세요"}
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return {"success": False, "message": f"주문 실패: {result.comment}"}
+            return {"success": False, "message": f"주문 실패 (코드:{result.retcode}): {result.comment}"}
 
         return {
             "success": True,
