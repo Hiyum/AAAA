@@ -269,6 +269,10 @@
           <option value="manual">수동 (직접 설정)</option>
         </select>
       </div>
+      <div class="risk-row" style="margin-top:4px;">
+        <label>고정 Lot (0=자동)</label>
+        <input id="fixed-lot" type="number" value="0" min="0" max="10" step="0.01" style="width:70px;">
+      </div>
       <div id="manual-risk" style="display:none;">
         <div class="risk-row">
           <label>거래당 손실 %</label>
@@ -577,13 +581,15 @@ function toggleRiskMode() {
 
 async function updateRisk() {
   const mode = document.getElementById('risk-mode').value;
-  const body = { mode };
+  const fixedLot = parseFloat(document.getElementById('fixed-lot').value) || 0;
+  const body = { mode, fixed_lot: fixedLot };
   if (mode === 'manual') {
     body.risk_per_trade = parseFloat(document.getElementById('risk-per-trade').value) / 100;
     body.daily_loss_limit = parseFloat(document.getElementById('daily-loss').value) / 100;
   }
   await fetch('/api/risk', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-  addLog(`위험 관리 설정 업데이트: ${mode === 'auto' ? '자동' : '수동'} 모드`, 'SUCCESS');
+  const lotMsg = fixedLot > 0 ? ` | 고정 Lot: ${fixedLot}` : ' | Lot: 자동계산';
+  addLog(`위험 관리 설정 업데이트: ${mode === 'auto' ? '자동' : '수동'} 모드${lotMsg}`, 'SUCCESS');
 }
 
 async function reloadStrategy() {

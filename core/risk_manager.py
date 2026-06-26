@@ -10,13 +10,17 @@ class RiskManager:
         self.daily_loss_limit = Config.DEFAULT_DAILY_LOSS_LIMIT
         self.daily_loss_so_far = 0.0
         self.initial_balance = 0.0
+        self.fixed_lot = 0.0   # 0이면 자동계산, 0보다 크면 고정 lot 사용
 
-    def set_mode(self, mode: str, risk_per_trade: float = None, daily_loss_limit: float = None):
+    def set_mode(self, mode: str, risk_per_trade: float = None,
+                 daily_loss_limit: float = None, fixed_lot: float = None):
         self.mode = mode
         if risk_per_trade is not None:
             self.risk_per_trade = risk_per_trade
         if daily_loss_limit is not None:
             self.daily_loss_limit = daily_loss_limit
+        if fixed_lot is not None:
+            self.fixed_lot = fixed_lot
 
     def set_initial_balance(self, balance: float):
         self.initial_balance = balance
@@ -34,6 +38,8 @@ class RiskManager:
 
     def calculate_lot_size(self, account_balance: float, entry_price: float,
                            stop_loss: float, pip_value: float = 1.0) -> float:
+        if self.fixed_lot > 0:
+            return self.fixed_lot
         risk_pct = self.get_risk_per_trade(account_balance)
         risk_amount = account_balance * risk_pct
         sl_distance = abs(entry_price - stop_loss)
@@ -74,4 +80,5 @@ class RiskManager:
             "risk_per_trade": self.risk_per_trade,
             "daily_loss_limit": self.daily_loss_limit,
             "daily_loss_so_far": self.daily_loss_so_far,
+            "fixed_lot": self.fixed_lot,
         }

@@ -84,6 +84,7 @@ def update_risk():
         mode=data.get("mode", "auto"),
         risk_per_trade=float(data.get("risk_per_trade", 0.02)),
         daily_loss_limit=float(data.get("daily_loss_limit", 0.05)),
+        fixed_lot=float(data.get("fixed_lot", 0)),
     )
     return jsonify({"success": True, "settings": engine.risk.get_settings()})
 
