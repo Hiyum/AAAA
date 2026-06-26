@@ -146,24 +146,38 @@ class MT5Connector:
             }
 
         order_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": lot,
-            "type": order_type,
-            "price": price,
-            "sl": sl,
-            "tp": tp,
-            "deviation": 20,
-            "magic": 234000,
-            "comment": comment,
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
-        result = mt5.order_send(request)
+
+        # 브로커마다 지원하는 filling mode가 다르므로 순서대로 시도
+        filling_modes = [
+            mt5.ORDER_FILLING_IOC,
+            mt5.ORDER_FILLING_FOK,
+            mt5.ORDER_FILLING_RETURN,
+        ]
+
+        result = None
+        last_error_msg = ""
+        for filling in filling_modes:
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": lot,
+                "type": order_type,
+                "price": price,
+                "sl": sl,
+                "tp": tp,
+                "deviation": 20,
+                "magic": 234000,
+                "comment": comment,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": filling,
+            }
+            result = mt5.order_send(request)
+            if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+                break
+            last_error_msg = result.comment if result else str(mt5.last_error())
+
         if result is None:
-            error = mt5.last_error()
-            return {"success": False, "message": f"MT5 주문 응답 없음 (오류코드: {error}) - MT5 터미널 자동매매 허용 여부 및 종목이 Market Watch에 있는지 확인하세요"}
+            return {"success": False, "message": f"MT5 주문 응답 없음: {mt5.last_error()} - MT5 터미널에서 자동매매(알고리즘 트레이딩)를 허용했는지 확인하세요"}
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             return {"success": False, "message": f"주문 실패 (코드:{result.retcode}): {result.comment}"}
 
