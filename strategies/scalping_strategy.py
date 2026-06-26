@@ -92,19 +92,22 @@ class ScalpingStrategy(BaseStrategy):
         up_move = high - high.shift()
         down_move = low.shift() - low
 
-        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+        plus_dm = pd.Series(
+            np.where((up_move > down_move) & (up_move > 0), up_move, 0.0),
+            index=df.index
+        )
+        minus_dm = pd.Series(
+            np.where((down_move > up_move) & (down_move > 0), down_move, 0.0),
+            index=df.index
+        )
 
-        atr_n = pd.Series(tr).ewm(span=n, adjust=False).mean()
-        plus_di = 100 * pd.Series(plus_dm).ewm(span=n, adjust=False).mean() / atr_n
-        minus_di = 100 * pd.Series(minus_dm).ewm(span=n, adjust=False).mean() / atr_n
+        atr_n = tr.ewm(span=n, adjust=False).mean()
+        plus_di = 100 * plus_dm.ewm(span=n, adjust=False).mean() / atr_n
+        minus_di = 100 * minus_dm.ewm(span=n, adjust=False).mean() / atr_n
 
         dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan))
         adx = dx.ewm(span=n, adjust=False).mean()
 
-        adx.index = df.index
-        plus_di.index = df.index
-        minus_di.index = df.index
         return adx, plus_di, minus_di
 
     def _rsi(self, series: pd.Series) -> pd.Series:
