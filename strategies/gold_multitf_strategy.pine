@@ -1,0 +1,269 @@
+// ============================================================
+//  GOLD Multi-Timeframe Strategy | Pine Script v6
+//  Activo recomendado : XAUUSD (Gold Spot)
+//  Timeframes válidos : 1m · 5m · 10m · 15m · 30m · 45m
+//                       1h · 2h · 4h · 1D
+// ============================================================
+//@version=6
+strategy(
+     title            = "Gold Multi-TF Strategy [PSv6]",
+     shorttitle       = "GOLD·MTF",
+     overlay          = true,
+     initial_capital  = 10000,
+     currency         = currency.USD,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 2,
+     commission_type  = strategy.commission.percent,
+     commission_value = 0.01,
+     slippage         = 2,
+     pyramiding       = 0,
+     calc_on_every_tick = false
+)
+
+// ─────────────────────────────────────────────────────────────
+//  INPUTS
+// ─────────────────────────────────────────────────────────────
+grp_ema   = "── EMAs ──"
+grp_rsi   = "── RSI ──"
+grp_atr   = "── ATR / Risk ──"
+grp_sess  = "── Sesión ──"
+grp_vis   = "── Visual ──"
+
+i_auto_params = input.bool(true,  "Auto-parámetros por TF",  group=grp_ema,
+     tooltip="Ajusta EMA Fast/Slow automáticamente según el timeframe activo.")
+i_ema_fast    = input.int(9,   "EMA Rápida (manual)", minval=2,  group=grp_ema)
+i_ema_slow    = input.int(21,  "EMA Lenta  (manual)", minval=5,  group=grp_ema)
+
+i_rsi_len     = input.int(14,  "Longitud RSI",        minval=2,  group=grp_rsi)
+i_rsi_ob      = input.int(70,  "RSI Sobrecompra",     minval=60, group=grp_rsi)
+i_rsi_os      = input.int(30,  "RSI Sobreventa",      maxval=40, group=grp_rsi)
+
+i_atr_len     = input.int(14,  "Longitud ATR",        minval=1,  group=grp_atr)
+i_atr_sl      = input.float(1.5,"Multiplicador SL (ATR)", minval=0.5, step=0.1, group=grp_atr)
+i_rr          = input.float(2.0,"Ratio Riesgo:Beneficio", minval=0.5, step=0.1, group=grp_atr)
+i_trail       = input.bool(false,"Trailing Stop",          group=grp_atr)
+i_trail_atr   = input.float(1.0,"Trailing ATR mult",  minval=0.3, step=0.1, group=grp_atr)
+
+i_use_sess    = input.bool(false,"Filtrar por sesión (London + NY)", group=grp_sess)
+i_sess_london = input.session("0700-1600", "Sesión London (UTC)",    group=grp_sess)
+i_sess_ny     = input.session("1300-2200", "Sesión New York (UTC)",  group=grp_sess)
+
+i_show_ema    = input.bool(true, "Mostrar EMAs",    group=grp_vis)
+i_show_bg     = input.bool(true, "Fondo de tendencia", group=grp_vis)
+i_show_sl_tp  = input.bool(true, "Mostrar SL / TP en gráfico", group=grp_vis)
+
+
+// ─────────────────────────────────────────────────────────────
+//  PARÁMETROS ADAPTATIVOS POR TIMEFRAME
+// ─────────────────────────────────────────────────────────────
+tf_secs = timeframe.in_seconds()
+tf_mins = tf_secs / 60
+
+// Tabla de parámetros óptimos según TF
+ema_fast_auto = tf_mins <= 1   ? 8  :
+                tf_mins <= 5   ? 9  :
+                tf_mins <= 10  ? 12 :
+                tf_mins <= 15  ? 13 :
+                tf_mins <= 30  ? 21 :
+                tf_mins <= 45  ? 21 :
+                tf_mins <= 60  ? 21 :
+                tf_mins <= 120 ? 34 :
+                tf_mins <= 240 ? 34 :
+                               50
+
+ema_slow_auto = tf_mins <= 1   ? 21  :
+                tf_mins <= 5   ? 34  :
+                tf_mins <= 10  ? 34  :
+                tf_mins <= 15  ? 55  :
+                tf_mins <= 30  ? 55  :
+                tf_mins <= 45  ? 89  :
+                tf_mins <= 60  ? 89  :
+                tf_mins <= 120 ? 144 :
+                tf_mins <= 240 ? 200 :
+                               200
+
+atr_sl_auto   = tf_mins <= 5   ? 1.2 :
+                tf_mins <= 15  ? 1.5 :
+                tf_mins <= 60  ? 2.0 :
+                tf_mins <= 240 ? 2.5 :
+                               3.0
+
+ema_fast = i_auto_params ? ema_fast_auto : i_ema_fast
+ema_slow = i_auto_params ? ema_slow_auto : i_ema_slow
+atr_sl   = i_auto_params ? atr_sl_auto   : i_atr_sl
+
+
+// ─────────────────────────────────────────────────────────────
+//  INDICADORES
+// ─────────────────────────────────────────────────────────────
+ema_f = ta.ema(close, ema_fast)
+ema_s = ta.ema(close, ema_slow)
+rsi   = ta.rsi(close, i_rsi_len)
+atr   = ta.atr(i_atr_len)
+
+// Tendencia y momentum
+trend_bull = ema_f > ema_s
+trend_bear = ema_f < ema_s
+mom_bull   = rsi > 50 and rsi < i_rsi_ob
+mom_bear   = rsi < 50 and rsi > i_rsi_os
+
+// Precio sobre / bajo ambas EMAs
+price_bull = close > ema_f and close > ema_s
+price_bear = close < ema_f and close < ema_s
+
+
+// ─────────────────────────────────────────────────────────────
+//  FILTRO DE SESIÓN
+// ─────────────────────────────────────────────────────────────
+in_london = not na(time("", i_sess_london))
+in_ny     = not na(time("", i_sess_ny))
+sess_ok   = not i_use_sess or (in_london or in_ny)
+
+
+// ─────────────────────────────────────────────────────────────
+//  SEÑALES DE ENTRADA
+// ─────────────────────────────────────────────────────────────
+cross_bull = ta.crossover(ema_f, ema_s)
+cross_bear = ta.crossunder(ema_f, ema_s)
+
+long_signal  = cross_bull and mom_bull and price_bull and sess_ok
+short_signal = cross_bear and mom_bear and price_bear and sess_ok
+
+
+// ─────────────────────────────────────────────────────────────
+//  EJECUCIÓN DE ESTRATEGIA
+// ─────────────────────────────────────────────────────────────
+var float sl_price = na
+var float tp_price = na
+
+if long_signal and strategy.position_size == 0
+    sl_price := close - atr * atr_sl
+    tp_price := close + atr * atr_sl * i_rr
+    strategy.entry("Long", strategy.long, comment="▲ LONG")
+    if i_trail
+        strategy.exit("Exit Long", "Long",
+             trail_price = close,
+             trail_offset = atr * i_trail_atr / syminfo.mintick,
+             stop = sl_price)
+    else
+        strategy.exit("Exit Long", "Long", stop=sl_price, limit=tp_price)
+
+if short_signal and strategy.position_size == 0
+    sl_price := close + atr * atr_sl
+    tp_price := close - atr * atr_sl * i_rr
+    strategy.entry("Short", strategy.short, comment="▼ SHORT")
+    if i_trail
+        strategy.exit("Exit Short", "Short",
+             trail_price = close,
+             trail_offset = atr * i_trail_atr / syminfo.mintick,
+             stop = sl_price)
+    else
+        strategy.exit("Exit Short", "Short", stop=sl_price, limit=tp_price)
+
+// Cierre por señal contraria
+if strategy.position_size > 0 and short_signal
+    strategy.close("Long", comment="◄ Reversal")
+
+if strategy.position_size < 0 and long_signal
+    strategy.close("Short", comment="► Reversal")
+
+
+// ─────────────────────────────────────────────────────────────
+//  VISUAL — EMAs
+// ─────────────────────────────────────────────────────────────
+plot(i_show_ema ? ema_f : na, "EMA Rápida",
+     color     = trend_bull ? color.new(color.aqua, 0) : color.new(color.red, 0),
+     linewidth = 1)
+
+plot(i_show_ema ? ema_s : na, "EMA Lenta",
+     color     = trend_bull ? color.new(color.blue, 0) : color.new(color.maroon, 0),
+     linewidth = 2)
+
+// Relleno entre EMAs
+ema_f_plot = plot(na, editable=false, display=display.none)
+ema_s_plot = plot(na, editable=false, display=display.none)
+fill(ema_f_plot, ema_s_plot,
+     color = trend_bull ? color.new(color.green, 88) : color.new(color.red, 88))
+
+
+// ─────────────────────────────────────────────────────────────
+//  VISUAL — Fondo de tendencia
+// ─────────────────────────────────────────────────────────────
+bgcolor(i_show_bg and trend_bull ? color.new(color.green, 96) : na, title="BG Alcista")
+bgcolor(i_show_bg and trend_bear ? color.new(color.red,   96) : na, title="BG Bajista")
+
+
+// ─────────────────────────────────────────────────────────────
+//  VISUAL — Señales de entrada
+// ─────────────────────────────────────────────────────────────
+plotshape(long_signal,  "Señal Long",
+     style    = shape.triangleup,
+     location = location.belowbar,
+     color    = color.new(color.lime, 0),
+     size     = size.small)
+
+plotshape(short_signal, "Señal Short",
+     style    = shape.triangledown,
+     location = location.abovebar,
+     color    = color.new(color.red, 0),
+     size     = size.small)
+
+
+// ─────────────────────────────────────────────────────────────
+//  VISUAL — Líneas SL / TP activos
+// ─────────────────────────────────────────────────────────────
+var line sl_line = na
+var line tp_line = na
+
+if i_show_sl_tp and strategy.position_size != 0 and barstate.isconfirmed
+    line.delete(sl_line)
+    line.delete(tp_line)
+    sl_line := line.new(bar_index - 1, sl_price, bar_index, sl_price,
+         extend = extend.right, color = color.red,   style = line.style_dashed, width = 1)
+    tp_line := line.new(bar_index - 1, tp_price, bar_index, tp_price,
+         extend = extend.right, color = color.green, style = line.style_dashed, width = 1)
+
+if strategy.position_size == 0
+    line.delete(sl_line)
+    line.delete(tp_line)
+
+
+// ─────────────────────────────────────────────────────────────
+//  TABLA DE INFORMACIÓN (esquina superior derecha)
+// ─────────────────────────────────────────────────────────────
+var table t = table.new(position.top_right, 2, 7,
+     bgcolor      = color.new(color.black, 65),
+     border_width = 1,
+     border_color = color.new(color.gray, 50))
+
+col_lbl = color.new(color.silver, 0)
+col_val = color.new(color.yellow, 0)
+col_bull = color.new(color.lime, 0)
+col_bear = color.new(color.red,  0)
+sz = size.small
+
+if barstate.islast
+    table.cell(t, 0, 0, "GOLD Multi-TF",   text_color=color.white,  text_size=sz, bgcolor=color.new(color.navy,50))
+    table.cell(t, 1, 0, timeframe.period + "m", text_color=color.white, text_size=sz, bgcolor=color.new(color.navy,50))
+
+    table.cell(t, 0, 1, "EMA Rápida",  text_color=col_lbl, text_size=sz)
+    table.cell(t, 1, 1, str.tostring(ema_fast),  text_color=col_val, text_size=sz)
+
+    table.cell(t, 0, 2, "EMA Lenta",   text_color=col_lbl, text_size=sz)
+    table.cell(t, 1, 2, str.tostring(ema_slow),  text_color=col_val, text_size=sz)
+
+    table.cell(t, 0, 3, "ATR SL mult", text_color=col_lbl, text_size=sz)
+    table.cell(t, 1, 3, str.tostring(atr_sl, "#.#"), text_color=col_val, text_size=sz)
+
+    table.cell(t, 0, 4, "R:R",         text_color=col_lbl, text_size=sz)
+    table.cell(t, 1, 4, str.tostring(i_rr, "#.#") + ":1", text_color=col_bull, text_size=sz)
+
+    table.cell(t, 0, 5, "RSI",         text_color=col_lbl, text_size=sz)
+    table.cell(t, 1, 5, str.tostring(math.round(rsi, 1)),
+         text_color = rsi > i_rsi_ob ? col_bear : rsi < i_rsi_os ? col_bull : col_val,
+         text_size  = sz)
+
+    table.cell(t, 0, 6, "Tendencia",   text_color=col_lbl, text_size=sz)
+    table.cell(t, 1, 6, trend_bull ? "ALCISTA ▲" : "BAJISTA ▼",
+         text_color = trend_bull ? col_bull : col_bear,
+         text_size  = sz)
