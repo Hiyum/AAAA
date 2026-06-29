@@ -114,6 +114,21 @@ def run_backtest():
 
 @app.route("/webhook/tradingview", methods=["POST"])
 def tradingview_webhook():
+    """
+    TradingView가 분석한 지표 데이터를 수신 → Claude AI 종합 판단 → MT5 주문.
+    TradingView Alert Message 예시(JSON):
+    {
+      "symbol": "GOLD#",
+      "price": {{close}},
+      "market_structure": "bullish",
+      "poc": 4040.5,
+      "liquidity_sweep": "bullish_sweep",
+      "cvd": "rising",
+      "vwap": 4038.2,
+      "rsi": 42,
+      "timeframe": "M5"
+    }
+    """
     secret = request.headers.get("X-Webhook-Secret", "")
     if Config.WEBHOOK_SECRET and secret != Config.WEBHOOK_SECRET:
         return jsonify({"error": "인증 실패"}), 403
@@ -121,35 +136,69 @@ def tradingview_webhook():
     data = request.json or {}
     broadcast_log({
         "time": datetime.now().strftime("%H:%M:%S"),
-        "message": f"TradingView 신호 수신: {data}",
+        "message": f"TradingView 분석 데이터 수신: {data.get('symbol', '?')} @ {data.get('price', '?')}",
         "level": "INFO"
     })
 
     if not engine.active or not engine.mt5.connected:
         return jsonify({"message": "자동매매 비활성화 상태 - 신호 무시"})
 
-    action = str(data.get("action", "")).upper()
     symbol = str(data.get("symbol", Config.PRIORITY_SYMBOLS[0]))
     price = float(data.get("price", engine.mt5.get_current_price(symbol) or 0))
+    if price <= 0:
+        return jsonify({"message": "가격 정보 없음 - 무시"})
 
-    if action in ("BUY", "SELL") and price > 0:
-        account = engine.mt5.get_account_info()
-        balance = account.get("balance", 10000)
-        sl_offset = float(data.get("sl_offset", price * 0.005))
-        tp_offset = float(data.get("tp_offset", price * 0.01))
-        sl = price - sl_offset if action == "BUY" else price + sl_offset
-        tp = price + tp_offset if action == "BUY" else price - tp_offset
-        lot = engine.risk.calculate_lot_size(balance, price, sl)
-
-        result = engine.mt5.place_order(symbol, action, lot, price, sl, tp, comment="TradingView Alert")
+    # 최대 포지션 수 체크
+    open_positions = engine.mt5.get_open_positions()
+    if len(open_positions) >= engine.max_open_positions:
         broadcast_log({
             "time": datetime.now().strftime("%H:%M:%S"),
-            "message": f"TradingView 주문 실행: {action} {symbol} {lot}lot",
-            "level": "SUCCESS" if result["success"] else "ERROR"
+            "message": f"포지션 {len(open_positions)}개 진행 중 - TradingView 신호 보류",
+            "level": "WARNING"
         })
-        return jsonify(result)
+        return jsonify({"message": "최대 포지션 도달 - 신호 보류"})
 
-    return jsonify({"message": "신호 처리됨"})
+    # ── Claude AI 종합 분석 ──────────────────────────────
+    broadcast_log({
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "message": "Claude AI가 TradingView 데이터 분석 중...",
+        "level": "INFO"
+    })
+    decision = engine.ai.analyze_tradingview(data)
+
+    broadcast_log({
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "message": f"AI 판단: {decision['action']} | 신뢰도 {decision.get('confidence', 0):.0%} | {decision.get('reasoning', '')}",
+        "level": "INFO"
+    })
+
+    action = str(decision.get("action", "HOLD")).upper()
+    if action not in ("BUY", "SELL") or decision.get("confidence", 0) < 0.6:
+        return jsonify({"message": f"AI 거래 보류: {decision.get('reasoning', '')}"})
+
+    # ── MT5 주문 실행 ────────────────────────────────────
+    account = engine.mt5.get_account_info()
+    balance = account.get("balance", 10000)
+    sl = float(decision.get("stop_loss") or (price * 0.995 if action == "BUY" else price * 1.005))
+    tp = float(decision.get("take_profit") or (price * 1.01 if action == "BUY" else price * 0.99))
+    lot = engine.risk.calculate_lot_size(balance, price, sl)
+
+    result = engine.mt5.place_order(symbol, action, lot, price, sl, tp, comment="ClaudeAI-TV")
+    if result["success"]:
+        engine.trade_history.append({
+            "time": datetime.now().isoformat(),
+            "symbol": symbol, "action": action, "lot": lot,
+            "entry_price": price, "sl": result.get("sl"), "tp": result.get("tp"),
+            "ticket": result.get("ticket"), "reasoning": decision.get("reasoning", ""),
+            "profit": 0, "status": "OPEN", "source": "TradingView",
+        })
+    broadcast_log({
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "message": f"TradingView→AI 주문 실행: {action} {symbol} {lot}lot @ {price}" if result["success"]
+                   else f"주문 실패: {result.get('message')}",
+        "level": "SUCCESS" if result["success"] else "ERROR"
+    })
+    return jsonify(result)
 
 
 @app.route("/api/logs")

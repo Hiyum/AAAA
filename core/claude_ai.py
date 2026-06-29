@@ -189,6 +189,80 @@ class ClaudeAI:
             logger.error(f"포지션 관리 판단 오류: {e}")
             return {"action": "HOLD", "reason": f"AI 오류 - 홀드 유지: {str(e)[:30]}"}
 
+    def analyze_tradingview(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        TradingView webhook으로 받은 지표 데이터를 종합 분석.
+        Market Structure + Volume Profile + Liquidity Sweep + CVD + VWAP 등.
+        Claude AI가 맥락을 이해해서 최종 매매 판단을 내림.
+        """
+        symbol = payload.get("symbol", "GOLD#")
+        price = payload.get("price", 0)
+
+        # AI 없으면 TradingView가 보낸 action을 그대로 사용
+        if not self.available:
+            action = str(payload.get("action", "HOLD")).upper()
+            return {
+                "action": action if action in ("BUY", "SELL") else "HOLD",
+                "confidence": 0.6,
+                "reasoning": "AI 미사용 - TradingView 신호 그대로 실행",
+                "stop_loss": payload.get("sl", 0),
+                "take_profit": payload.get("tp", 0),
+            }
+
+        prompt = f"""당신은 기관급 스마트머니 트레이더 AI입니다.
+TradingView에서 계산한 아래 지표들을 종합 분석하여 최종 매매 결정을 내려주세요.
+
+종목: {symbol}
+현재가: {price}
+
+═══ TradingView 분석 데이터 ═══
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+
+═══ 분석 기준 ═══
+1. Market Structure (시장 구조): BOS/CHoCH로 추세 방향 확인
+2. Volume Profile / POC: 기관 거래 집중 가격대 대비 현재 위치
+3. Liquidity Sweep: 유동성 스윕(가짜 돌파) 후 반전 여부
+4. CVD (누적 델타): 실제 매수/매도 압력 방향
+5. VWAP: 기관 기준선 대비 가격 위치
+6. 위 지표들이 서로 일치(confluence)할수록 강한 신호
+
+다음 JSON 형식으로만 응답하세요:
+{{
+  "action": "BUY 또는 SELL 또는 HOLD",
+  "confidence": 0.0~1.0,
+  "reasoning": "결정 이유 (한국어, 2-3문장, 어떤 지표들이 일치하는지)",
+  "stop_loss": 숫자,
+  "take_profit": 숫자
+}}"""
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=500,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            text = response.content[0].text.strip()
+            if "```" in text:
+                text = text.split("```")[1].replace("json", "").strip()
+            if not text.endswith("}"):
+                text = text[:text.rfind('"')] + '"}'
+            result = json.loads(text)
+            # 안전장치: SL/TP 없으면 payload 값 또는 기본값
+            if not result.get("stop_loss"):
+                result["stop_loss"] = payload.get("sl", 0)
+            if not result.get("take_profit"):
+                result["take_profit"] = payload.get("tp", 0)
+            return result
+        except Exception as e:
+            logger.error(f"TradingView 분석 오류: {e}")
+            return {
+                "action": "HOLD",
+                "confidence": 0.0,
+                "reasoning": f"AI 분석 오류 - 거래 보류: {str(e)[:40]}",
+                "stop_loss": payload.get("sl", 0),
+                "take_profit": payload.get("tp", 0),
+            }
+
     def summarize_performance(self, trades: List[Dict]) -> str:
         if not self.available or not trades:
             return "거래 내역 없음"
