@@ -1,27 +1,16 @@
-// =============================================================
-//  TradingView → Claude AI → MT5 자동매매 신호 송출 스크립트
-// =============================================================
-//  전략 구성:
-//   - Market Structure (BOS / CHoCH)
-//   - Volume Profile POC (근사: 최근 N봉 거래량 가중 평균가)
-//   - Liquidity Sweep (유동성 스윕 감지)
-//   - CVD (Cumulative Volume Delta)
-//   - VWAP
-//
-//  사용법:
-//   1. TradingView 차트 열기 → Pine Editor에 이 코드 붙여넣기
-//   2. "차트에 추가" 클릭
-//   3. 차트 우측 알람(Alert) 버튼 클릭
-//   4. 조건: "ClaudeAI Signal" 선택
-//   5. Notifications 탭 → Webhook URL 체크
-//      URL: https://내서버주소/webhook/tradingview
-//   6. Message 칸은 비워두세요 (스크립트가 자동으로 JSON 생성)
-// =============================================================
 //@version=5
 indicator("ClaudeAI Smart Money Signal", overlay=true)
 
+// =============================================================
+//  TradingView -> Claude AI -> MT5 자동매매 신호 송출
+//  구성: Market Structure + Volume Profile(POC) + Liquidity Sweep + CVD + VWAP
+//
+//  [중요] 붙여넣기 전에 Pine Editor 내용을 전부 지우세요 (Ctrl+A 후 Delete).
+//  그래야 기존 스크립트와 섞이지 않습니다.
+// =============================================================
+
 // ── 입력 파라미터 ──────────────────────────────────────
-symbolName  = input.string("GOLD#", "MT5 종목명 (브로커 기준)")
+symbolName  = input.string("GOLD#", "MT5 종목명")
 swingLen    = input.int(10, "Market Structure 스윙 길이")
 pocLookback = input.int(50, "Volume Profile 탐색 구간")
 sweepLen    = input.int(20, "Liquidity Sweep 탐색 구간")
@@ -29,56 +18,40 @@ atrLen      = input.int(14, "ATR 기간")
 rrRatio     = input.float(2.0, "Risk:Reward 비율")
 
 // ── 지표 계산 ──────────────────────────────────────────
-
-// 1) VWAP
 vwapVal = ta.vwap(hlc3)
+atrVal  = ta.atr(atrLen)
+rsiVal  = ta.rsi(close, 14)
 
-// 2) ATR (손절/목표 계산용)
-atrVal = ta.atr(atrLen)
-
-// 3) RSI
-rsiVal = ta.rsi(close, 14)
-
-// 4) Market Structure (BOS/CHoCH 근사)
-swingHigh = ta.highest(high, swingLen)
-swingLow  = ta.lowest(low, swingLen)
+// Market Structure (BOS/CHoCH 근사)
+swingHigh     = ta.highest(high, swingLen)
+swingLow      = ta.lowest(low, swingLen)
 prevSwingHigh = ta.highest(high, swingLen)[swingLen]
 prevSwingLow  = ta.lowest(low, swingLen)[swingLen]
-
 bullStructure = swingHigh > prevSwingHigh and swingLow > prevSwingLow
 bearStructure = swingHigh < prevSwingHigh and swingLow < prevSwingLow
 marketStructure = bullStructure ? "bullish" : bearStructure ? "bearish" : "ranging"
 
-// 5) Volume Profile POC (근사: 거래량 가중 평균가)
-var float pocNum = 0.0
-var float pocDen = 0.0
-pocNum := math.sum(hlc3 * volume, pocLookback)
-pocDen := math.sum(volume, pocLookback)
-poc = pocDen > 0 ? pocNum / pocDen : close
+// Volume Profile POC (거래량 가중 평균가 근사)
+pocNum = math.sum(hlc3 * volume, pocLookback)
+pocDen = math.sum(volume, pocLookback)
+poc    = pocDen > 0 ? pocNum / pocDen : close
 
-// 6) CVD (Cumulative Volume Delta 근사)
-//    종가가 시가보다 높으면 매수 우위, 낮으면 매도 우위
-delta = close > open ? volume : close < open ? -volume : 0
+// CVD (누적 볼륨 델타 근사)
+delta  = close > open ? volume : close < open ? -volume : 0
 cvdVal = math.sum(delta, 14)
 cvdDir = cvdVal > 0 ? "rising" : cvdVal < 0 ? "falling" : "neutral"
 
-// 7) Liquidity Sweep (유동성 스윕 감지)
-//    직전 저점 아래를 찍고 다시 위로 회복 = bullish sweep
-//    직전 고점 위를 찍고 다시 아래로 = bearish sweep
+// Liquidity Sweep (유동성 스윕)
 recentLow  = ta.lowest(low, sweepLen)[1]
 recentHigh = ta.highest(high, sweepLen)[1]
-bullSweep = low < recentLow and close > recentLow
-bearSweep = high > recentHigh and close < recentHigh
-liqSweep = bullSweep ? "bullish_sweep" : bearSweep ? "bearish_sweep" : "none"
+bullSweep  = low < recentLow and close > recentLow
+bearSweep  = high > recentHigh and close < recentHigh
+liqSweep   = bullSweep ? "bullish_sweep" : bearSweep ? "bearish_sweep" : "none"
 
-// ── 진입 신호 조건 ──────────────────────────────────────
-// 여러 지표가 일치(confluence)할 때만 신호 발생.
-// 최종 판단은 서버의 Claude AI가 내리므로, 여기선 후보만 전송.
+// ── 진입 신호 조건 (지표 일치) ─────────────────────────
+longSignal  = (bullStructure or bullSweep) and cvdDir == "rising" and close > vwapVal
+shortSignal = (bearStructure or bearSweep) and cvdDir == "falling" and close < vwapVal
 
-longSignal = (marketStructure == "bullish" or bullSweep) and cvdDir == "rising" and close > vwapVal
-shortSignal = (marketStructure == "bearish" or bearSweep) and cvdDir == "falling" and close < vwapVal
-
-// 손절/목표 계산
 longSL  = close - atrVal * 1.5
 longTP  = close + atrVal * 1.5 * rrRatio
 shortSL = close + atrVal * 1.5
@@ -86,26 +59,23 @@ shortTP = close - atrVal * 1.5 * rrRatio
 
 // ── Webhook JSON 메시지 생성 ───────────────────────────
 buildJson(action, slv, tpv) =>
-    '{' +
-      '"symbol": "' + symbolName + '", ' +
-      '"action": "' + action + '", ' +
-      '"price": ' + str.tostring(close, "#.##") + ', ' +
-      '"market_structure": "' + marketStructure + '", ' +
-      '"poc": ' + str.tostring(poc, "#.##") + ', ' +
-      '"liquidity_sweep": "' + liqSweep + '", ' +
-      '"cvd": "' + cvdDir + '", ' +
-      '"vwap": ' + str.tostring(vwapVal, "#.##") + ', ' +
-      '"rsi": ' + str.tostring(rsiVal, "#.#") + ', ' +
-      '"atr": ' + str.tostring(atrVal, "#.##") + ', ' +
-      '"sl": ' + str.tostring(slv, "#.##") + ', ' +
-      '"tp": ' + str.tostring(tpv, "#.##") + ', ' +
-      '"timeframe": "' + timeframe.period + '"' +
-    '}'
+    '{"symbol": "' + symbolName + '"' +
+      ', "action": "' + action + '"' +
+      ', "price": ' + str.tostring(close, "#.##") +
+      ', "market_structure": "' + marketStructure + '"' +
+      ', "poc": ' + str.tostring(poc, "#.##") +
+      ', "liquidity_sweep": "' + liqSweep + '"' +
+      ', "cvd": "' + cvdDir + '"' +
+      ', "vwap": ' + str.tostring(vwapVal, "#.##") +
+      ', "rsi": ' + str.tostring(rsiVal, "#.#") +
+      ', "atr": ' + str.tostring(atrVal, "#.##") +
+      ', "sl": ' + str.tostring(slv, "#.##") +
+      ', "tp": ' + str.tostring(tpv, "#.##") +
+      ', "timeframe": "' + timeframe.period + '"}'
 
 // ── 알람 발생 ───────────────────────────────────────────
 if longSignal
     alert(buildJson("BUY", longSL, longTP), alert.freq_once_per_bar_close)
-
 if shortSignal
     alert(buildJson("SELL", shortSL, shortTP), alert.freq_once_per_bar_close)
 
@@ -114,4 +84,4 @@ plot(vwapVal, "VWAP", color.orange, 2)
 plot(poc, "POC", color.purple, 1, plot.style_circles)
 plotshape(longSignal, "LONG", shape.triangleup, location.belowbar, color.green, size=size.small)
 plotshape(shortSignal, "SHORT", shape.triangledown, location.abovebar, color.red, size=size.small)
-bgcolor(marketStructure == "bullish" ? color.new(color.green, 92) : marketStructure == "bearish" ? color.new(color.red, 92) : na)
+bgcolor(bullStructure ? color.new(color.green, 92) : bearStructure ? color.new(color.red, 92) : na)
