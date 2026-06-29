@@ -1,13 +1,28 @@
 //@version=5
-indicator("ClaudeAI Smart Money Signal", overlay=true)
-
 // =============================================================
-//  TradingView -> Claude AI -> MT5 자동매매 신호 송출
+//  ClaudeAI Smart Money STRATEGY (백테스트 + 실거래 웹훅 겸용)
+// =============================================================
 //  구성: Market Structure + Volume Profile(POC) + Liquidity Sweep + CVD + VWAP
 //
-//  [중요] 붙여넣기 전에 Pine Editor 내용을 전부 지우세요 (Ctrl+A 후 Delete).
-//  그래야 기존 스크립트와 섞이지 않습니다.
+//  이 스크립트 하나로:
+//   1) TradingView 하단 Strategy Tester에서 백테스트 (승률/수익/낙폭)
+//   2) 실거래 시 webhook으로 MT5에 신호 전송
+//
+//  [백테스트 보는 법]
+//   - 차트에 추가하면 하단에 "Strategy Tester" 탭이 자동으로 생김
+//   - Overview / Performance / List of Trades 에서 결과 확인
+//
+//  [실거래 알람 만드는 법]
+//   - 우측 알람(시계) → + 생성 → Condition: "ClaudeAI Smart Money Strategy"
+//     → "Any alert() function call" 선택 → Webhook URL 입력
+//
+//  [붙여넣기 전] Pine Editor 내용 전부 삭제(Ctrl+A → Delete) 후 붙여넣기
 // =============================================================
+strategy("ClaudeAI Smart Money Strategy", overlay=true,
+     initial_capital=80,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     commission_type=strategy.commission.percent, commission_value=0.0,
+     slippage=2)
 
 // ── 입력 파라미터 ──────────────────────────────────────
 symbolName  = input.string("GOLD#", "MT5 종목명")
@@ -16,6 +31,8 @@ pocLookback = input.int(50, "Volume Profile 탐색 구간")
 sweepLen    = input.int(20, "Liquidity Sweep 탐색 구간")
 atrLen      = input.int(14, "ATR 기간")
 rrRatio     = input.float(2.0, "Risk:Reward 비율")
+useDateFilter = input.bool(false, "백테스트 기간 제한")
+startDate   = input.time(timestamp("2024-01-01"), "시작일")
 
 // ── 지표 계산 ──────────────────────────────────────────
 vwapVal = ta.vwap(hlc3)
@@ -49,15 +66,29 @@ bearSweep  = high > recentHigh and close < recentHigh
 liqSweep   = bullSweep ? "bullish_sweep" : bearSweep ? "bearish_sweep" : "none"
 
 // ── 진입 신호 조건 (지표 일치) ─────────────────────────
-longSignal  = (bullStructure or bullSweep) and cvdDir == "rising" and close > vwapVal
-shortSignal = (bearStructure or bearSweep) and cvdDir == "falling" and close < vwapVal
+inDateRange = not useDateFilter or time >= startDate
+longSignal  = inDateRange and (bullStructure or bullSweep) and cvdDir == "rising" and close > vwapVal
+shortSignal = inDateRange and (bearStructure or bearSweep) and cvdDir == "falling" and close < vwapVal
 
-// action 결정: 진입 신호면 BUY/SELL, 아니면 HOLD(주시용 데이터)
+longSL  = close - atrVal * 1.5
+longTP  = close + atrVal * 1.5 * rrRatio
+shortSL = close + atrVal * 1.5
+shortTP = close - atrVal * 1.5 * rrRatio
+
+// ── 백테스트 매매 (Strategy Tester용) ──────────────────
+if longSignal and strategy.position_size <= 0
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=longSL, limit=longTP)
+
+if shortSignal and strategy.position_size >= 0
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=shortSL, limit=shortTP)
+
+// ── Webhook JSON 메시지 (실거래용) ─────────────────────
 sigAction = longSignal ? "BUY" : shortSignal ? "SELL" : "HOLD"
-sl_ = sigAction == "SELL" ? close + atrVal * 1.5 : close - atrVal * 1.5
-tp_ = sigAction == "SELL" ? close - atrVal * 1.5 * rrRatio : close + atrVal * 1.5 * rrRatio
+sl_ = sigAction == "SELL" ? shortSL : longSL
+tp_ = sigAction == "SELL" ? shortTP : longTP
 
-// ── Webhook JSON 메시지 생성 ───────────────────────────
 buildJson(action, slv, tpv) =>
     '{"symbol": "' + symbolName + '"' +
       ', "action": "' + action + '"' +
@@ -73,15 +104,10 @@ buildJson(action, slv, tpv) =>
       ', "tp": ' + str.tostring(tpv, "#.##") +
       ', "timeframe": "' + timeframe.period + '"}'
 
-// ── 알람 발생 ───────────────────────────────────────────
-// 매 봉 마감마다 1회 전송. 서버가 포지션 유무로 진입/주시를 자동 분기.
-//  - 포지션 없음 + action=BUY/SELL → 진입 분석
-//  - 포지션 있음 → 주시(HOLD/CLOSE/손절이동) 분석 (action 무관, 지표로 판단)
+// 매 봉 마감마다 1회 전송 (서버가 포지션 유무로 진입/주시 자동 분기)
 alert(buildJson(sigAction, sl_, tp_), alert.freq_once_per_bar_close)
 
 // ── 차트 시각화 ─────────────────────────────────────────
 plot(vwapVal, "VWAP", color.orange, 2)
 plot(poc, "POC", color.purple, 1, plot.style_circles)
-plotshape(longSignal, "LONG", shape.triangleup, location.belowbar, color.green, size=size.small)
-plotshape(shortSignal, "SHORT", shape.triangledown, location.abovebar, color.red, size=size.small)
 bgcolor(bullStructure ? color.new(color.green, 92) : bearStructure ? color.new(color.red, 92) : na)
