@@ -168,6 +168,37 @@ class MT5Connector:
             if mode not in filling_modes:
                 filling_modes.append(mode)
 
+        # ── SL/TP 보정 (코드 10016 Invalid stops 방지) ──────────
+        # 브로커의 실제 현재가 + 최소 정지거리(stops level)에 맞춰 손절/목표 조정
+        tick = mt5.symbol_info_tick(symbol)
+        if info is not None and tick is not None:
+            point = info.point or 0.01
+            digits = info.digits or 2
+            # BUY는 ask에, SELL은 bid에 체결
+            exec_price = tick.ask if action == "BUY" else tick.bid
+            if exec_price and exec_price > 0:
+                price = exec_price
+            # 최소 거리 = max(정지거리, 스프레드) * point, 0이면 안전 기본값
+            min_dist = max(info.trade_stops_level, info.spread) * point
+            if min_dist <= 0:
+                min_dist = 20 * point
+            min_dist *= 1.5  # 여유 버퍼
+
+            if action == "BUY":
+                if sl and sl > 0:
+                    sl = min(sl, price - min_dist)
+                if tp and tp > 0:
+                    tp = max(tp, price + min_dist)
+            else:  # SELL
+                if sl and sl > 0:
+                    sl = max(sl, price + min_dist)
+                if tp and tp > 0:
+                    tp = min(tp, price - min_dist)
+
+            sl = round(sl, digits) if sl else 0.0
+            tp = round(tp, digits) if tp else 0.0
+            price = round(price, digits)
+
         result = None
         last_error_msg = ""
         for filling in filling_modes:
