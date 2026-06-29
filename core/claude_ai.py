@@ -209,8 +209,9 @@ class ClaudeAI:
                 "take_profit": payload.get("tp", 0),
             }
 
-        prompt = f"""당신은 기관급 스마트머니 트레이더 AI입니다.
-TradingView에서 계산한 아래 지표들을 종합 분석하여 최종 매매 결정을 내려주세요.
+        prompt = f"""당신은 외환 데이트레이딩 전문 트레이더 AI입니다.
+당일 청산(오버나이트 금지) 원칙으로 운용하며, 추세 방향의 눌림목 진입을 노립니다.
+TradingView에서 계산한 아래 지표들을 종합하여 최종 매매 결정을 내려주세요.
 
 종목: {symbol}
 현재가: {price}
@@ -218,19 +219,19 @@ TradingView에서 계산한 아래 지표들을 종합 분석하여 최종 매�
 ═══ TradingView 분석 데이터 ═══
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
-═══ 분석 기준 ═══
-1. Market Structure (시장 구조): BOS/CHoCH로 추세 방향 확인
-2. Volume Profile / POC: 기관 거래 집중 가격대 대비 현재 위치
-3. Liquidity Sweep: 유동성 스윕(가짜 돌파) 후 반전 여부
-4. CVD (누적 델타): 실제 매수/매도 압력 방향
-5. VWAP: 기관 기준선 대비 가격 위치
-6. 위 지표들이 서로 일치(confluence)할수록 강한 신호
+═══ 분석 기준 (데이트레이딩) ═══
+1. 추세 방향(market_structure): bullish면 매수만, bearish면 매도만 고려 (역추세 금지)
+2. EMA 정배열(ema_fast vs ema_slow): 추세 방향 확인
+3. ADX: 20 이상이어야 추세 유효 (낮으면 횡보 → HOLD)
+4. RSI: 추세 방향으로의 되돌림(눌림목) 후 재개 시점인지
+5. 세션(in_session): false면 거래 시간 밖 → HOLD
+6. 지표들이 일치할수록 강한 신호. 애매하면 보수적으로 HOLD.
 
 다음 JSON 형식으로만 응답하세요:
 {{
   "action": "BUY 또는 SELL 또는 HOLD",
   "confidence": 0.0~1.0,
-  "reasoning": "결정 이유 (한국어, 2-3문장, 어떤 지표들이 일치하는지)",
+  "reasoning": "결정 이유 (한국어, 2-3문장, 추세/ADX/RSI 근거)",
   "stop_loss": 숫자,
   "take_profit": 숫자
 }}"""

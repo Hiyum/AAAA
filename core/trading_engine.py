@@ -25,6 +25,7 @@ class TradingEngine:
         self.scan_thread: Optional[threading.Thread] = None
         self.monitor_thread: Optional[threading.Thread] = None
         self.watchdog_thread: Optional[threading.Thread] = None
+        self.session_thread: Optional[threading.Thread] = None
         self.strategy = None
         self.current_symbol = None
         self.trade_history = []
@@ -89,7 +90,29 @@ class TradingEngine:
             self.watchdog_thread.start()
             self.log("AI 자동매매 시작 (MT5 스캔 + TradingView 병행)", "SUCCESS")
 
+        # 당일 청산 안전장치 스레드 (시각 기반, 두 모드 공통)
+        if getattr(Config, "ENFORCE_DAY_CLOSE", False):
+            self.session_thread = threading.Thread(target=self._session_guard_loop, daemon=True)
+            self.session_thread.start()
+            self.log(f"→ 당일 청산 활성화: 매일 {Config.DAILY_FLATTEN_HOUR}:00 UTC 전 포지션 청산", "INFO")
+
         return {"success": True, "message": "AI 자동매매 시작됨"}
+
+    def _session_guard_loop(self):
+        """매일 지정 시각(UTC)에 모든 포지션을 청산하는 안전장치"""
+        from datetime import timezone
+        last_flatten_date = None
+        while self.active:
+            try:
+                now = datetime.now(timezone.utc)
+                # 청산 시각에 도달했고, 오늘 아직 청산 안 했으면 실행
+                if now.hour == Config.DAILY_FLATTEN_HOUR and last_flatten_date != now.date():
+                    if self.mt5.connected and self.mt5.get_open_positions():
+                        self._close_all_positions(f"당일 청산 시각({Config.DAILY_FLATTEN_HOUR}:00 UTC)")
+                    last_flatten_date = now.date()
+            except Exception as e:
+                logger.error(f"세션 가드 오류: {e}")
+            time.sleep(60)
 
     # ── TradingView 이벤트 처리 (진입 + 주시 통합) ─────────────
 
@@ -112,6 +135,12 @@ class TradingEngine:
         if not self.active or not self.mt5.connected:
             return {"message": "자동매매 비활성화 - 신호 무시"}
 
+        action = str(payload.get("action", "")).upper()
+
+        # 당일 청산 신호: 세션 종료 시 전 포지션 즉시 청산 (오버나이트 금지)
+        if action == "CLOSE_ALL":
+            return self._close_all_positions("당일 청산 (세션 종료)")
+
         # 해당 종목의 열린 포지션 찾기
         positions = [p for p in self.mt5.get_open_positions() if p["symbol"] == symbol]
 
@@ -120,8 +149,39 @@ class TradingEngine:
         else:
             return self._tv_check_entry(symbol, price, payload)
 
+    def _close_all_positions(self, reason: str = "") -> dict:
+        """모든 열린 포지션을 즉시 청산"""
+        positions = self.mt5.get_open_positions()
+        if not positions:
+            return {"message": "청산할 포지션 없음"}
+        self.log(f"[전체 청산] {reason} - {len(positions)}개 포지션 청산 중...", "WARNING")
+        closed = 0
+        for pos in positions:
+            r = self.mt5.close_position(pos["ticket"])
+            if r["success"]:
+                closed += 1
+                self._record_closed(pos["ticket"], pos.get("profit", 0))
+        self.log(f"[전체 청산 완료] {closed}/{len(positions)}개 청산됨", "SUCCESS")
+        return {"message": f"{closed}개 포지션 청산", "closed": closed}
+
+    def _in_trading_session(self) -> bool:
+        """현재 UTC 시각이 거래 세션 안인지 (데이트레이딩 세션 필터)"""
+        if not getattr(Config, "ENFORCE_DAY_CLOSE", False):
+            return True
+        from datetime import timezone
+        hour = datetime.now(timezone.utc).hour
+        start = Config.TRADE_SESSION_START_HOUR
+        end = Config.TRADE_SESSION_END_HOUR
+        if start <= end:
+            return start <= hour < end
+        return hour >= start or hour < end   # 자정 넘는 세션 대비
+
     def _tv_check_entry(self, symbol: str, price: float, payload: dict) -> dict:
         """포지션 없을 때: TradingView 데이터로 진입 판단"""
+        # 데이트레이딩: 거래 세션 밖에서는 신규 진입 안 함
+        if not self._in_trading_session():
+            return {"message": "거래 세션 밖 - 신규 진입 보류 (당일 청산 모드)"}
+
         all_positions = self.mt5.get_open_positions()
         if len(all_positions) >= self.max_open_positions:
             return {"message": f"최대 포지션({self.max_open_positions}) 도달 - 진입 보류"}
