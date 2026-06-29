@@ -19,8 +19,8 @@
 //  [붙여넣기 전] Pine Editor 내용 전부 삭제(Ctrl+A → Delete) 후 붙여넣기
 // =============================================================
 strategy("ClaudeAI Smart Money Strategy", overlay=true,
-     initial_capital=80,
-     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     initial_capital=10000,
+     default_qty_type=strategy.fixed, default_qty_value=1,
      commission_type=strategy.commission.percent, commission_value=0.0,
      slippage=2)
 
