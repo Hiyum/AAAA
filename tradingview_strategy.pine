@@ -31,12 +31,17 @@ pocLookback = input.int(50, "Volume Profile 탐색 구간")
 sweepLen    = input.int(20, "Liquidity Sweep 탐색 구간")
 atrLen      = input.int(14, "ATR 기간")
 rrRatio     = input.float(2.0, "Risk:Reward 비율")
-minScore    = input.int(3, "진입 최소 점수 (1~5, 낮을수록 거래 많음)", minval=1, maxval=5)
+minScore    = input.int(2, "진입 최소 점수 (1~5, 낮을수록 거래 많음)", minval=1, maxval=5)
 useDateFilter = input.bool(false, "백테스트 기간 제한")
 startDate   = input.time(timestamp("2024-01-01"), "시작일")
 
 // ── 지표 계산 ──────────────────────────────────────────
-vwapVal = ta.vwap(hlc3)
+// 거래량이 없는 심볼(일부 선물)에서도 작동하도록 안전 처리
+vol = na(volume) or volume == 0 ? 1.0 : volume
+
+// VWAP: 계산 불가(거래량 없음) 시 20기간 평균가로 대체
+vwapRaw = ta.vwap(hlc3)
+vwapVal = na(vwapRaw) ? ta.sma(hlc3, 20) : vwapRaw
 atrVal  = ta.atr(atrLen)
 rsiVal  = ta.rsi(close, 14)
 
@@ -49,13 +54,13 @@ bullStructure = swingHigh > prevSwingHigh and swingLow > prevSwingLow
 bearStructure = swingHigh < prevSwingHigh and swingLow < prevSwingLow
 marketStructure = bullStructure ? "bullish" : bearStructure ? "bearish" : "ranging"
 
-// Volume Profile POC (거래량 가중 평균가 근사)
-pocNum = math.sum(hlc3 * volume, pocLookback)
-pocDen = math.sum(volume, pocLookback)
+// Volume Profile POC (거래량 가중 평균가 근사, 거래량 없으면 단순평균)
+pocNum = math.sum(hlc3 * vol, pocLookback)
+pocDen = math.sum(vol, pocLookback)
 poc    = pocDen > 0 ? pocNum / pocDen : close
 
-// CVD (누적 볼륨 델타 근사)
-delta  = close > open ? volume : close < open ? -volume : 0
+// CVD (누적 델타 근사, 거래량 없으면 봉 방향 ±1로 모멘텀 측정)
+delta  = close > open ? vol : close < open ? -vol : 0
 cvdVal = math.sum(delta, 14)
 cvdDir = cvdVal > 0 ? "rising" : cvdVal < 0 ? "falling" : "neutral"
 
