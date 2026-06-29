@@ -133,7 +133,21 @@ def tradingview_webhook():
     if Config.WEBHOOK_SECRET and secret != Config.WEBHOOK_SECRET:
         return jsonify({"error": "인증 실패"}), 403
 
-    data = request.json or {}
+    # TradingView는 Content-Type을 text/plain으로 보내므로 request.json이 실패함.
+    # force=True로 강제 파싱하고, 그래도 안 되면 raw 본문을 직접 json.loads.
+    data = request.get_json(force=True, silent=True)
+    if data is None:
+        raw = request.get_data(as_text=True).strip()
+        try:
+            data = json.loads(raw)
+        except Exception:
+            broadcast_log({
+                "time": datetime.now().strftime("%H:%M:%S"),
+                "message": f"TradingView 메시지 파싱 실패 (JSON 아님): {raw[:120]}",
+                "level": "ERROR"
+            })
+            return jsonify({"error": "JSON 형식이 아닙니다. TradingView 알람을 'Any alert() function call'로 만들었는지 확인하세요."}), 200
+
     broadcast_log({
         "time": datetime.now().strftime("%H:%M:%S"),
         "message": f"TradingView 수신: {data.get('symbol', '?')} @ {data.get('price', '?')} | 구조:{data.get('market_structure', '?')} CVD:{data.get('cvd', '?')}",
