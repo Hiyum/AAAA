@@ -19,7 +19,7 @@ class Config:
     # Supported symbols (MT5 registered)
     # ※ 브로커마다 외환 종목명이 다를 수 있음 (EURUSD / EURUSD# / EURUSD.r 등)
     #   MT5 Market Watch에서 정확한 이름 확인 후 맞추세요.
-    PRIORITY_SYMBOLS = ["EURUSD"]
+    PRIORITY_SYMBOLS = ["AUDUSD"]
 
     # True: 모든 분석/진입/청산/주시를 TradingView+Claude AI가 담당 (MT5는 주문 실행만)
     # False: MT5 자체 차트 스캔 전략도 병행

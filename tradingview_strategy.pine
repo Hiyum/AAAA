@@ -21,7 +21,7 @@ strategy("ClaudeAI Day Trading Strategy", overlay=true,
      slippage=1)
 
 // ── 입력 파라미터 ──────────────────────────────────────
-symbolName  = input.string("EURUSD", "MT5 종목명 (브로커 기준, 예: EURUSD 또는 EURUSD#)")
+symbolName  = input.string("AUDUSD", "MT5 종목명 (브로커 기준, 예: AUDUSD 또는 AUDUSD#)")
 emaFastLen  = input.int(50,  "추세 EMA (빠름)")
 emaSlowLen  = input.int(200, "추세 EMA (느림)")
 adxLen      = input.int(14,  "ADX 기간")
