@@ -263,6 +263,65 @@ TradingView에서 계산한 아래 지표들을 종합 분석하여 최종 매�
                 "take_profit": payload.get("tp", 0),
             }
 
+    def manage_position_tv(self, symbol: str, action: str, entry_price: float,
+                           current_price: float, sl: float, tp: float,
+                           profit: float, tv_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        TradingView 지표 데이터로 열린 포지션을 주시.
+        MT5 차트가 아니라 TradingView가 보낸 지표(구조/CVD/스윕/VWAP 등)로 판단.
+        """
+        pnl_pct = ((current_price - entry_price) / entry_price * 100)
+        if action == "SELL":
+            pnl_pct = -pnl_pct
+
+        # AI 없으면 기본 규칙
+        if not self.available:
+            if pnl_pct > 0.5 and action == "BUY" and sl < entry_price:
+                return {"action": "MOVE_SL", "new_sl": round(entry_price, 5),
+                        "reason": "수익 발생 - 손절 본전 이동"}
+            return {"action": "HOLD", "reason": f"포지션 유지 | 손익 {pnl_pct:+.2f}%"}
+
+        prompt = f"""당신은 열린 포지션을 관리하는 기관급 트레이더 AI입니다.
+MT5 차트가 아니라 TradingView가 실시간 계산해 보낸 아래 지표로 판단하세요.
+
+═══ 현재 포지션 ═══
+- 종목: {symbol}
+- 방향: {action}
+- 진입가: {entry_price}
+- 현재가: {current_price}
+- 손절가: {sl}
+- 목표가: {tp}
+- 손익: ${profit:.2f} ({pnl_pct:+.2f}%)
+
+═══ TradingView 실시간 지표 ═══
+{json.dumps(tv_data, ensure_ascii=False, indent=2)}
+
+판단 기준:
+- 진입 방향과 시장 구조(market_structure)/CVD(cvd)가 여전히 일치하면 유지(HOLD)
+- 구조가 반대로 전환되거나 CVD가 역전되면 청산(CLOSE) 고려
+- 수익 중이고 추세 유효하면 손절을 본전/유리한 쪽으로 이동(MOVE_SL)
+
+다음 중 하나를 JSON으로만 응답:
+1. {{"action": "HOLD", "reason": "이유"}}
+2. {{"action": "CLOSE", "reason": "이유"}}
+3. {{"action": "MOVE_SL", "new_sl": 숫자, "reason": "이유"}}"""
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=400,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            text = response.content[0].text.strip()
+            if "```" in text:
+                text = text.split("```")[1].replace("json", "").strip()
+            if not text.endswith("}"):
+                text = text[:text.rfind('"')] + '"}'
+            return json.loads(text)
+        except Exception as e:
+            logger.error(f"TV 포지션 주시 오류: {e}")
+            return {"action": "HOLD", "reason": f"AI 오류 - 홀드 유지: {str(e)[:30]}"}
+
     def summarize_performance(self, trades: List[Dict]) -> str:
         if not self.available or not trades:
             return "거래 내역 없음"

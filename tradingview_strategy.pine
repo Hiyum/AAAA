@@ -52,10 +52,10 @@ liqSweep   = bullSweep ? "bullish_sweep" : bearSweep ? "bearish_sweep" : "none"
 longSignal  = (bullStructure or bullSweep) and cvdDir == "rising" and close > vwapVal
 shortSignal = (bearStructure or bearSweep) and cvdDir == "falling" and close < vwapVal
 
-longSL  = close - atrVal * 1.5
-longTP  = close + atrVal * 1.5 * rrRatio
-shortSL = close + atrVal * 1.5
-shortTP = close - atrVal * 1.5 * rrRatio
+// action 결정: 진입 신호면 BUY/SELL, 아니면 HOLD(주시용 데이터)
+sigAction = longSignal ? "BUY" : shortSignal ? "SELL" : "HOLD"
+sl_ = sigAction == "SELL" ? close + atrVal * 1.5 : close - atrVal * 1.5
+tp_ = sigAction == "SELL" ? close - atrVal * 1.5 * rrRatio : close + atrVal * 1.5 * rrRatio
 
 // ── Webhook JSON 메시지 생성 ───────────────────────────
 buildJson(action, slv, tpv) =>
@@ -74,10 +74,10 @@ buildJson(action, slv, tpv) =>
       ', "timeframe": "' + timeframe.period + '"}'
 
 // ── 알람 발생 ───────────────────────────────────────────
-if longSignal
-    alert(buildJson("BUY", longSL, longTP), alert.freq_once_per_bar_close)
-if shortSignal
-    alert(buildJson("SELL", shortSL, shortTP), alert.freq_once_per_bar_close)
+// 매 봉 마감마다 1회 전송. 서버가 포지션 유무로 진입/주시를 자동 분기.
+//  - 포지션 없음 + action=BUY/SELL → 진입 분석
+//  - 포지션 있음 → 주시(HOLD/CLOSE/손절이동) 분석 (action 무관, 지표로 판단)
+alert(buildJson(sigAction, sl_, tp_), alert.freq_once_per_bar_close)
 
 // ── 차트 시각화 ─────────────────────────────────────────
 plot(vwapVal, "VWAP", color.orange, 2)

@@ -30,6 +30,8 @@ class TradingEngine:
         self.trade_history = []
         self.max_open_positions = 1   # 동시 최대 포지션 수
         self.monitor_interval = 30    # 포지션 주시 간격 (초)
+        self.tv_only = Config.TRADINGVIEW_ONLY   # TradingView 전용 모드
+        self.latest_tv_data = {}      # symbol -> 최신 TradingView 지표 스냅샷
 
     def log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -67,24 +69,124 @@ class TradingEngine:
 
         account = self.mt5.get_account_info()
         self.risk.set_initial_balance(account.get("balance", 0))
-        self.load_strategy()
 
         self.active = True
 
-        # 진입 탐색 스레드
-        self.scan_thread = threading.Thread(target=self._scanning_loop, daemon=True)
-        self.scan_thread.start()
+        if self.tv_only:
+            # TradingView 전용 모드: MT5 자체 스캔 없음. 모든 신호는 webhook으로 수신.
+            # 진입/주시 모두 TradingView 데이터가 도착할 때 이벤트 기반으로 처리됨.
+            self.log("AI 자동매매 시작 [TradingView 전용 모드]", "SUCCESS")
+            self.log("→ 차트 분석/진입/청산/주시 = Claude AI + TradingView | 주문 실행 = MT5", "INFO")
+            self.log("→ TradingView Alert 신호 대기 중...", "INFO")
+        else:
+            # 병행 모드: MT5 자체 차트 스캔(Elder+Raschke) + 포지션 주시
+            self.load_strategy()
+            self.scan_thread = threading.Thread(target=self._scanning_loop, daemon=True)
+            self.scan_thread.start()
+            self.monitor_thread = threading.Thread(target=self._position_monitor_loop, daemon=True)
+            self.monitor_thread.start()
+            self.watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
+            self.watchdog_thread.start()
+            self.log("AI 자동매매 시작 (MT5 스캔 + TradingView 병행)", "SUCCESS")
 
-        # 포지션 주시 스레드
-        self.monitor_thread = threading.Thread(target=self._position_monitor_loop, daemon=True)
-        self.monitor_thread.start()
-
-        # 스레드 감시 (watchdog)
-        self.watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
-        self.watchdog_thread.start()
-
-        self.log("AI 자동매매 시작 (진입 탐색 + 포지션 주시 동시 실행)", "SUCCESS")
         return {"success": True, "message": "AI 자동매매 시작됨"}
+
+    # ── TradingView 이벤트 처리 (진입 + 주시 통합) ─────────────
+
+    def process_tradingview(self, payload: dict) -> dict:
+        """
+        TradingView가 매 봉마다 보내는 지표 데이터를 처리.
+        - 열린 포지션이 있으면 → Claude AI가 주시(HOLD/CLOSE/MOVE_SL) 판단
+        - 없으면 → Claude AI가 진입(BUY/SELL/HOLD) 판단
+        MT5는 오직 주문 실행/청산/수정에만 사용.
+        """
+        symbol = str(payload.get("symbol", Config.PRIORITY_SYMBOLS[0]))
+        price = float(payload.get("price", self.mt5.get_current_price(symbol) or 0))
+        if price <= 0:
+            return {"message": "가격 정보 없음"}
+
+        # 최신 TradingView 스냅샷 저장
+        self.latest_tv_data[symbol] = {"data": payload, "time": datetime.now().isoformat()}
+        self.current_symbol = symbol
+
+        if not self.active or not self.mt5.connected:
+            return {"message": "자동매매 비활성화 - 신호 무시"}
+
+        # 해당 종목의 열린 포지션 찾기
+        positions = [p for p in self.mt5.get_open_positions() if p["symbol"] == symbol]
+
+        if positions:
+            return self._tv_manage_positions(positions, payload)
+        else:
+            return self._tv_check_entry(symbol, price, payload)
+
+    def _tv_check_entry(self, symbol: str, price: float, payload: dict) -> dict:
+        """포지션 없을 때: TradingView 데이터로 진입 판단"""
+        all_positions = self.mt5.get_open_positions()
+        if len(all_positions) >= self.max_open_positions:
+            return {"message": f"최대 포지션({self.max_open_positions}) 도달 - 진입 보류"}
+
+        self.log(f"[TV 진입분석] {symbol} @ {price} - Claude AI 판단 중...")
+        decision = self.ai.analyze_tradingview(payload)
+        self.log(f"[AI 진입판단] {decision['action']} | 신뢰도 {decision.get('confidence', 0):.0%} | {decision.get('reasoning', '')}")
+
+        action = str(decision.get("action", "HOLD")).upper()
+        if action not in ("BUY", "SELL") or decision.get("confidence", 0) < 0.6:
+            return {"message": f"AI 진입 보류: {decision.get('reasoning', '')}"}
+
+        balance = self.mt5.get_account_info().get("balance", 10000)
+        sl = float(decision.get("stop_loss") or (price * 0.995 if action == "BUY" else price * 1.005))
+        tp = float(decision.get("take_profit") or (price * 1.01 if action == "BUY" else price * 0.99))
+        lot = self.risk.calculate_lot_size(balance, price, sl)
+
+        result = self.mt5.place_order(symbol, action, lot, price, sl, tp, comment="ClaudeAI-TV")
+        if result["success"]:
+            self.trade_history.append({
+                "time": datetime.now().isoformat(), "symbol": symbol, "action": action,
+                "lot": lot, "entry_price": price, "sl": result.get("sl"), "tp": result.get("tp"),
+                "ticket": result.get("ticket"), "reasoning": decision.get("reasoning", ""),
+                "profit": 0, "status": "OPEN", "source": "TradingView",
+            })
+            self.log(f"[TV→AI 주문] {action} {symbol} {lot}lot @ {price} #티켓{result.get('ticket')}", "SUCCESS")
+        else:
+            self.log(f"[주문 실패] {result.get('message')}", "ERROR")
+        return result
+
+    def _tv_manage_positions(self, positions: list, payload: dict) -> dict:
+        """포지션 있을 때: TradingView 데이터로 주시/청산/손절이동 판단"""
+        results = []
+        for pos in positions:
+            ticket = pos["ticket"]
+            action = pos["type"]
+            entry = pos["open_price"]
+            current = pos["current_price"]
+            profit = pos["profit"]
+            sl = pos["sl"]
+            tp = pos["tp"]
+            sign = "+" if profit >= 0 else ""
+            self.log(f"[TV 주시] #{ticket} {pos['symbol']} {action} | 진입:{entry}→현재:{current} | 손익:{sign}{profit:.2f}$")
+
+            decision = self.ai.manage_position_tv(
+                symbol=pos["symbol"], action=action, entry_price=entry,
+                current_price=current, sl=sl, tp=tp, profit=profit, tv_data=payload,
+            )
+            self.log(f"[AI 주시판단] {decision['action']} | {decision.get('reason', '')}")
+
+            if decision["action"] == "CLOSE":
+                r = self.mt5.close_position(ticket)
+                if r["success"]:
+                    self.log(f"[청산 완료] #{ticket} | 손익 {sign}{profit:.2f}$", "SUCCESS")
+                    self._record_closed(ticket, profit)
+                else:
+                    self.log(f"[청산 실패] {r.get('message')}", "ERROR")
+                results.append(r)
+            elif decision["action"] == "MOVE_SL" and decision.get("new_sl"):
+                new_sl = float(decision["new_sl"])
+                self.log(f"[손절 이동] #{ticket} SL {sl}→{new_sl}")
+                results.append(self.mt5.modify_position(ticket, new_sl, tp))
+            else:
+                results.append({"action": "HOLD", "ticket": ticket})
+        return {"message": "포지션 주시 처리됨", "results": results}
 
     def stop(self):
         self.active = False
