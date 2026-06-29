@@ -31,7 +31,12 @@ pocLookback = input.int(50, "Volume Profile 탐색 구간")
 sweepLen    = input.int(20, "Liquidity Sweep 탐색 구간")
 atrLen      = input.int(14, "ATR 기간")
 rrRatio     = input.float(2.0, "Risk:Reward 비율")
-minScore    = input.int(2, "진입 최소 점수 (1~5, 낮을수록 거래 많음)", minval=1, maxval=5)
+minScore    = input.int(4, "진입 최소 점수 (1~5, 낮을수록 거래 많음)", minval=1, maxval=5)
+emaTrendLen = input.int(200, "추세 필터 EMA (방향)")
+adxLen      = input.int(14, "ADX 기간 (추세 강도)")
+adxMin      = input.float(20.0, "최소 ADX (이 값 이상일 때만 진입)")
+useTrendFilter = input.bool(true, "추세 필터 사용 (EMA200 + ADX)")
+cooldownBars = input.int(5, "재진입 대기 봉 수 (과매매 방지)")
 useDateFilter = input.bool(false, "백테스트 기간 제한")
 startDate   = input.time(timestamp("2024-01-01"), "시작일")
 
@@ -44,6 +49,13 @@ vwapRaw = ta.vwap(hlc3)
 vwapVal = na(vwapRaw) ? ta.sma(hlc3, 20) : vwapRaw
 atrVal  = ta.atr(atrLen)
 rsiVal  = ta.rsi(close, 14)
+
+// 추세 필터: EMA200 방향 + ADX 강도
+emaTrend = ta.ema(close, emaTrendLen)
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+trending = adxVal >= adxMin
+upTrend   = close > emaTrend
+downTrend = close < emaTrend
 
 // Market Structure (BOS/CHoCH 근사)
 swingHigh     = ta.highest(high, swingLen)
@@ -78,20 +90,28 @@ inDateRange = not useDateFilter or time >= startDate
 bullScore = (bullStructure ? 1 : 0) + (bullSweep ? 1 : 0) + (cvdDir == "rising" ? 1 : 0) + (close > vwapVal ? 1 : 0) + (rsiVal < 50 ? 1 : 0)
 bearScore = (bearStructure ? 1 : 0) + (bearSweep ? 1 : 0) + (cvdDir == "falling" ? 1 : 0) + (close < vwapVal ? 1 : 0) + (rsiVal > 50 ? 1 : 0)
 
-longSignal  = inDateRange and bullScore >= minScore and bullScore > bearScore
-shortSignal = inDateRange and bearScore >= minScore and bearScore > bullScore
+// 추세 필터 적용: 큰 추세 방향 + 추세가 강할 때만 진입
+longOK  = not useTrendFilter or (upTrend and trending)
+shortOK = not useTrendFilter or (downTrend and trending)
+
+longSignal  = inDateRange and bullScore >= minScore and bullScore > bearScore and longOK
+shortSignal = inDateRange and bearScore >= minScore and bearScore > bullScore and shortOK
 
 longSL  = close - atrVal * 1.5
 longTP  = close + atrVal * 1.5 * rrRatio
 shortSL = close + atrVal * 1.5
 shortTP = close - atrVal * 1.5 * rrRatio
 
+// 재진입 대기: 마지막 거래 종료 후 일정 봉 이상 지나야 다시 진입 (과매매 방지)
+barsSinceClose = strategy.closedtrades > 0 ? bar_index - strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) : cooldownBars + 1
+cooldownOK = barsSinceClose >= cooldownBars
+
 // ── 백테스트 매매 (Strategy Tester용) ──────────────────
-if longSignal and strategy.position_size <= 0
+if longSignal and strategy.position_size <= 0 and cooldownOK
     strategy.entry("Long", strategy.long)
     strategy.exit("Long Exit", "Long", stop=longSL, limit=longTP)
 
-if shortSignal and strategy.position_size >= 0
+if shortSignal and strategy.position_size >= 0 and cooldownOK
     strategy.entry("Short", strategy.short)
     strategy.exit("Short Exit", "Short", stop=shortSL, limit=shortTP)
 
@@ -121,4 +141,5 @@ alert(buildJson(sigAction, sl_, tp_), alert.freq_once_per_bar_close)
 // ── 차트 시각화 ─────────────────────────────────────────
 plot(vwapVal, "VWAP", color.orange, 2)
 plot(poc, "POC", color.purple, 1, plot.style_circles)
-bgcolor(bullStructure ? color.new(color.green, 92) : bearStructure ? color.new(color.red, 92) : na)
+plot(emaTrend, "EMA200 추세", color.blue, 2)
+bgcolor(trending ? na : color.new(color.gray, 90))  // 회색 배경 = 추세 약함(거래 안 함)
