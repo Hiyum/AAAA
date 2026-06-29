@@ -31,6 +31,7 @@ pocLookback = input.int(50, "Volume Profile 탐색 구간")
 sweepLen    = input.int(20, "Liquidity Sweep 탐색 구간")
 atrLen      = input.int(14, "ATR 기간")
 rrRatio     = input.float(2.0, "Risk:Reward 비율")
+minScore    = input.int(3, "진입 최소 점수 (1~5, 낮을수록 거래 많음)", minval=1, maxval=5)
 useDateFilter = input.bool(false, "백테스트 기간 제한")
 startDate   = input.time(timestamp("2024-01-01"), "시작일")
 
@@ -65,10 +66,15 @@ bullSweep  = low < recentLow and close > recentLow
 bearSweep  = high > recentHigh and close < recentHigh
 liqSweep   = bullSweep ? "bullish_sweep" : bearSweep ? "bearish_sweep" : "none"
 
-// ── 진입 신호 조건 (지표 일치) ─────────────────────────
+// ── 진입 신호 조건 (점수제) ────────────────────────────
+// 5개 조건 중 minScore개 이상 일치하면 진입. 우위 방향으로만.
 inDateRange = not useDateFilter or time >= startDate
-longSignal  = inDateRange and (bullStructure or bullSweep) and cvdDir == "rising" and close > vwapVal
-shortSignal = inDateRange and (bearStructure or bearSweep) and cvdDir == "falling" and close < vwapVal
+
+bullScore = (bullStructure ? 1 : 0) + (bullSweep ? 1 : 0) + (cvdDir == "rising" ? 1 : 0) + (close > vwapVal ? 1 : 0) + (rsiVal < 50 ? 1 : 0)
+bearScore = (bearStructure ? 1 : 0) + (bearSweep ? 1 : 0) + (cvdDir == "falling" ? 1 : 0) + (close < vwapVal ? 1 : 0) + (rsiVal > 50 ? 1 : 0)
+
+longSignal  = inDateRange and bullScore >= minScore and bullScore > bearScore
+shortSignal = inDateRange and bearScore >= minScore and bearScore > bullScore
 
 longSL  = close - atrVal * 1.5
 longTP  = close + atrVal * 1.5 * rrRatio
