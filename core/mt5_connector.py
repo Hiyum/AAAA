@@ -150,12 +150,23 @@ class MT5Connector:
 
         order_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
 
-        # 브로커마다 지원하는 filling mode가 다르므로 순서대로 시도
-        filling_modes = [
-            mt5.ORDER_FILLING_IOC,
-            mt5.ORDER_FILLING_FOK,
-            mt5.ORDER_FILLING_RETURN,
-        ]
+        # 심볼을 Market Watch에 등록 (안 되어 있으면 주문 거부됨)
+        mt5.symbol_select(symbol, True)
+
+        # 종목이 실제 지원하는 filling mode를 조회해서 그것부터 시도.
+        # symbol_info.filling_mode는 비트마스크: 1=FOK, 2=IOC
+        info = mt5.symbol_info(symbol)
+        filling_modes = []
+        if info is not None:
+            fm = info.filling_mode
+            if fm & 2:   # SYMBOL_FILLING_IOC
+                filling_modes.append(mt5.ORDER_FILLING_IOC)
+            if fm & 1:   # SYMBOL_FILLING_FOK
+                filling_modes.append(mt5.ORDER_FILLING_FOK)
+        # 조회 실패/미지원 시 대비해 나머지도 뒤에 추가 (중복 제거)
+        for mode in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
+            if mode not in filling_modes:
+                filling_modes.append(mode)
 
         result = None
         last_error_msg = ""
@@ -176,6 +187,9 @@ class MT5Connector:
             }
             result = mt5.order_send(request)
             if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+                break
+            # filling mode 문제(10030)가 아니면 더 시도해도 소용없으니 중단
+            if result is not None and result.retcode != 10030:
                 break
             last_error_msg = result.comment if result else str(mt5.last_error())
 
