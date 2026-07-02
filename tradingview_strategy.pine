@@ -27,10 +27,10 @@ strategy("ClaudeAI MeanReversion RSI2", overlay=true,
 // ── 입력 파라미터 ──────────────────────────────────────
 symbolName  = input.string("AUDUSD", "MT5 종목명 (브로커 기준)")
 emaTrendLen = input.int(200, "장기 추세 EMA")
-rsiBuyLvl   = input.float(5.0,  "매수 진입 RSI(2) 이하", minval=1, maxval=15)
-rsiSellLvl  = input.float(95.0, "매도 진입 RSI(2) 이상", minval=85, maxval=99)
+rsiBuyLvl   = input.float(10.0, "매수 진입 RSI(2) 이하", minval=1, maxval=20)
+rsiSellLvl  = input.float(90.0, "매도 진입 RSI(2) 이상", minval=80, maxval=99)
 rsiExitLvl  = input.float(50.0, "청산 RSI(2) 기준 (중립 복귀)")
-useBB       = input.bool(true, "볼린저밴드 확인 추가 (진입 정확도 ↑)")
+useBB       = input.bool(false, "볼린저밴드 확인 추가 (거래 줄지만 정확도 ↑)")
 bbLen       = input.int(20, "볼린저 기간")
 bbMult      = input.float(2.0, "볼린저 배수")
 adxLen      = input.int(14, "ADX 기간")
