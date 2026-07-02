@@ -145,6 +145,23 @@ class TradingEngine:
         positions = [p for p in self.mt5.get_open_positions() if p["symbol"] == symbol]
 
         if positions:
+            # 평균회귀 청산 신호: RSI(2) 중립 복귀 → 방향 일치 포지션 즉시 청산
+            # (백테스트와 동일한 규칙 → 고승률 재현의 핵심)
+            exit_long = str(payload.get("exit_long", "")).lower() in ("true", "1")
+            exit_short = str(payload.get("exit_short", "")).lower() in ("true", "1")
+            if exit_long or exit_short:
+                closed = []
+                for pos in positions:
+                    if (pos["type"] == "BUY" and exit_long) or (pos["type"] == "SELL" and exit_short):
+                        r = self.mt5.close_position(pos["ticket"])
+                        if r["success"]:
+                            profit = pos.get("profit", 0)
+                            sign = "+" if profit >= 0 else ""
+                            self.log(f"[RSI 복귀 청산] #{pos['ticket']} {pos['type']} | 손익 {sign}{profit:.2f}$", "SUCCESS")
+                            self._record_closed(pos["ticket"], profit)
+                            closed.append(pos["ticket"])
+                if closed:
+                    return {"message": f"RSI 중립 복귀 청산: {len(closed)}건", "closed": closed}
             return self._tv_manage_positions(positions, payload)
         else:
             return self._tv_check_entry(symbol, price, payload)

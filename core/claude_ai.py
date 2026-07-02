@@ -209,9 +209,9 @@ class ClaudeAI:
                 "take_profit": payload.get("tp", 0),
             }
 
-        prompt = f"""당신은 외환 데이트레이딩 전문 트레이더 AI입니다.
-당일 청산(오버나이트 금지) 원칙으로 운용하며, 추세 방향의 눌림목 진입을 노립니다.
-TradingView에서 계산한 아래 지표들을 종합하여 최종 매매 결정을 내려주세요.
+        prompt = f"""당신은 외환 평균회귀(mean reversion) 데이트레이딩 전문 AI입니다.
+전략: Larry Connors RSI-2 방식. 장기 추세 방향에서 단기 극단(과매도/과매수)을 역으로 잡습니다.
+목표는 높은 승률(작은 이익 빠른 확보)이며, 당일 청산 원칙으로 운용합니다.
 
 종목: {symbol}
 현재가: {price}
@@ -219,19 +219,20 @@ TradingView에서 계산한 아래 지표들을 종합하여 최종 매매 결�
 ═══ TradingView 분석 데이터 ═══
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
-═══ 분석 기준 (데이트레이딩) ═══
-1. 추세 방향(market_structure): bullish면 매수만, bearish면 매도만 고려 (역추세 금지)
-2. EMA 정배열(ema_fast vs ema_slow): 추세 방향 확인
-3. ADX: 20 이상이어야 추세 유효 (낮으면 횡보 → HOLD)
-4. RSI: 추세 방향으로의 되돌림(눌림목) 후 재개 시점인지
-5. 세션(in_session): false면 거래 시간 밖 → HOLD
-6. 지표들이 일치할수록 강한 신호. 애매하면 보수적으로 HOLD.
+═══ 검증 기준 (평균회귀) ═══
+1. 매수(BUY)는 market_structure=bullish(EMA200 위) + rsi2가 5 이하 극단일 때만 유효
+2. 매도(SELL)는 market_structure=bearish(EMA200 아래) + rsi2가 95 이상 극단일 때만 유효
+3. ADX가 40 초과면 폭주 추세 → 역행 진입 위험 → HOLD
+4. 볼린저밴드 바깥(bb_lower 아래/bb_upper 위)이면 신뢰도 가산
+5. in_session=false면 HOLD
+6. 뉴스 급변동으로 보이는 비정상 캔들(ATR 대비 과도한 움직임)이면 HOLD
+7. 이 전략은 손절이 넓고 목표가 작습니다. 애매하면 반드시 HOLD (지는 거래 하나가 이기는 거래 3개를 지웁니다)
 
 다음 JSON 형식으로만 응답하세요:
 {{
   "action": "BUY 또는 SELL 또는 HOLD",
   "confidence": 0.0~1.0,
-  "reasoning": "결정 이유 (한국어, 2-3문장, 추세/ADX/RSI 근거)",
+  "reasoning": "결정 이유 (한국어, 2-3문장, rsi2/추세/ADX 근거)",
   "stop_loss": 숫자,
   "take_profit": 숫자
 }}"""
