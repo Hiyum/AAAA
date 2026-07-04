@@ -209,9 +209,10 @@ class ClaudeAI:
                 "take_profit": payload.get("tp", 0),
             }
 
-        prompt = f"""당신은 외환 평균회귀(mean reversion) 데이트레이딩 전문 AI입니다.
-전략: Larry Connors RSI-2 방식. 장기 추세 방향에서 단기 극단(과매도/과매수)을 역으로 잡습니다.
-목표는 높은 승률(작은 이익 빠른 확보)이며, 당일 청산 원칙으로 운용합니다.
+        prompt = f"""당신은 외환 평균회귀 스캘핑 전문 AI입니다.
+전략: 가격이 기준선(EMA/VWAP)에서 ATR 대비 과도하게 이탈(stretch)했을 때
+평균으로의 회귀를 노립니다. Pine Script가 이미 진입 신호(action)를 보냈고,
+당신의 역할은 명백히 나쁜 신호만 걸러내는 것입니다 (과도한 개입 금지).
 
 종목: {symbol}
 현재가: {price}
@@ -219,20 +220,19 @@ class ClaudeAI:
 ═══ TradingView 분석 데이터 ═══
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
-═══ 검증 기준 (평균회귀) ═══
-1. 매수(BUY)는 market_structure=bullish(EMA200 위) + rsi2가 5 이하 극단일 때만 유효
-2. 매도(SELL)는 market_structure=bearish(EMA200 아래) + rsi2가 95 이상 극단일 때만 유효
-3. ADX가 40 초과면 폭주 추세 → 역행 진입 위험 → HOLD
-4. 볼린저밴드 바깥(bb_lower 아래/bb_upper 위)이면 신뢰도 가산
+═══ 검증 기준 (평균회귀 스캘핑) ═══
+1. 기본적으로 Pine 신호(action)를 존중하세요. 확실한 반대 근거가 있을 때만 HOLD.
+2. stretch(기준선 이탈 정도)가 클수록 회귀 확률 높음 → 신뢰도 가산
+3. rsi2/rsi가 신호 방향과 일치(매수면 과매도, 매도면 과매수)하면 가산
+4. 뉴스 급변동으로 보이는 비정상 캔들(ATR 대비 과도한 단일 캔들)이면 HOLD
 5. in_session=false면 HOLD
-6. 뉴스 급변동으로 보이는 비정상 캔들(ATR 대비 과도한 움직임)이면 HOLD
-7. 이 전략은 손절이 넓고 목표가 작습니다. 애매하면 반드시 HOLD (지는 거래 하나가 이기는 거래 3개를 지웁니다)
+6. 스캘핑은 속도가 생명입니다. 판단은 간결하게.
 
 다음 JSON 형식으로만 응답하세요:
 {{
   "action": "BUY 또는 SELL 또는 HOLD",
   "confidence": 0.0~1.0,
-  "reasoning": "결정 이유 (한국어, 2-3문장, rsi2/추세/ADX 근거)",
+  "reasoning": "결정 이유 (한국어, 1-2문장)",
   "stop_loss": 숫자,
   "take_profit": 숫자
 }}"""

@@ -1,100 +1,146 @@
 //@version=5
 // =============================================================
-//  ClaudeAI High Win-Rate Mean Reversion (Connors RSI-2 기반)
+//  ClaudeAI Scalp MR v2 — 평균회귀 스트레치 스캘핑 (고빈도)
 // =============================================================
-//  근거: Larry Connors RSI-2 전략 (Street Smarts / Short Term
-//  Trading Strategies That Work). 문서화된 백테스트 승률 70~85%.
+//  핵심 구조 (기존 RSI2 임계값 방식에서 교체):
+//   "가격이 기준선(EMA/VWAP)에서 ATR의 N배 이상 이탈(stretch)하면
+//    평균으로 되돌아온다" — 스캘핑 리서치에서 가장 보편적으로
+//    검증된 구조. 1~5분봉에서 매일 수십 번 발생 → 고빈도 확보.
 //
-//  원리 (고승률의 수학):
-//   - 장기 추세 방향(EMA200)에서만 거래
-//   - RSI(2) < 5 극단 과매도 → 매수 / RSI(2) > 95 → 매도
-//   - 청산: RSI(2)가 50 복귀 시 (작은 이익 빠르게 확보)
-//   - 손절은 넓게(ATR×3), 목표는 작게(ATR×1)
-//   ⇒ 승률은 높아지지만, 질 때는 크게 짐.
-//   ⇒ 손익분기 승률 = 3/(3+1) = 75%. 실측 80%+면 흑자.
+//  진입 (완화된 조합):
+//   - 필수: |stretch| = |가격-기준선|/ATR >= stretchMult
+//   - 보조: 빠른 RSI 방향 일치 (완화된 35/65, 끌 수 있음)
+//   - 선택: EMA200 추세 필터 (기본 OFF - 빈도 우선)
 //
-//  대상: 외환 (AUDUSD 등) / 권장: 15분봉
-//  당일 청산: 세션 종료 시 전량 청산 (오버나이트 금지)
+//  청산 (적응형 스택 - 고정 TP/SL 아님):
+//   1. Dynamic TP: 가격이 기준선 복귀 시 부분청산(50%) — 시장 적응형
+//   2. Break Even: 1×ATR 유리하게 가면 손절을 본전으로
+//   3. Trailing: 부분청산 후 나머지는 ATR 트레일링
+//   4. ATR SL: 초기 손절 2×ATR
+//
+//  최적화: 모든 파라미터가 입력값 → 전략 설정에서 스윕 가능.
+//   우선 스윕 대상: stretchMult(1.0~2.5), slMult(1.5~3), trailMult(1~2)
+//
+//  권장: 1분봉(최대 빈도) 또는 5분봉(스프레드 부담 ↓)
+//  ⚠ 백테스트 시 커미션에 스프레드 반영 권장 (설정 → 속성 → 커미션)
 //
 //  [붙여넣기 전] Pine Editor 전부 삭제(Ctrl+A→Delete) 후 붙여넣기
 // =============================================================
-strategy("ClaudeAI MeanReversion RSI2", overlay=true,
+strategy("ClaudeAI Scalp MR v2", overlay=true,
      initial_capital=10000,
      default_qty_type=strategy.fixed, default_qty_value=1,
      commission_type=strategy.commission.percent, commission_value=0.0,
-     slippage=1)
+     slippage=1, process_orders_on_close=true)
 
-// ── 입력 파라미터 ──────────────────────────────────────
+// ── 입력 (전부 최적화 스윕 가능) ────────────────────────
 symbolName  = input.string("AUDUSD", "MT5 종목명 (브로커 기준)")
-emaTrendLen = input.int(200, "장기 추세 EMA")
-rsiBuyLvl   = input.float(10.0, "매수 진입 RSI(2) 이하", minval=1, maxval=20)
-rsiSellLvl  = input.float(90.0, "매도 진입 RSI(2) 이상", minval=80, maxval=99)
-rsiExitLvl  = input.float(50.0, "청산 RSI(2) 기준 (중립 복귀)")
-useBB       = input.bool(false, "볼린저밴드 확인 추가 (거래 줄지만 정확도 ↑)")
-bbLen       = input.int(20, "볼린저 기간")
-bbMult      = input.float(2.0, "볼린저 배수")
-adxLen      = input.int(14, "ADX 기간")
-adxMax      = input.float(40.0, "최대 ADX (폭주 추세 회피)")
+meanType    = input.string("EMA", "기준선 종류", options=["EMA", "VWAP"])
+meanLen     = input.int(20, "기준선 EMA 기간", minval=5, maxval=100)
+stretchMult = input.float(1.5, "진입 스트레치 (ATR 배수)", minval=0.5, maxval=4.0, step=0.1)
+useRsi      = input.bool(true, "빠른 RSI 방향 확인 (완화 필터)")
+rsiLen      = input.int(3, "빠른 RSI 기간", minval=2, maxval=8)
+rsiBuyMax   = input.float(35.0, "매수 시 RSI 이하", minval=10, maxval=50)
+rsiSellMin  = input.float(65.0, "매도 시 RSI 이상", minval=50, maxval=90)
+useTrendFilter = input.bool(false, "EMA200 추세 필터 (빈도↓ 안정성↑)")
 atrLen      = input.int(14, "ATR 기간")
-slMult      = input.float(3.0, "손절 = ATR × (넓게)")
-tpMult      = input.float(1.0, "목표 = ATR × (작게)")
+slMult      = input.float(2.0, "초기 손절 = ATR ×", minval=1.0, maxval=5.0, step=0.25)
+beTrigger   = input.float(1.0, "본전 이동 트리거 = ATR ×", minval=0.5, maxval=3.0, step=0.25)
+usePartial  = input.bool(true, "기준선 복귀 시 부분청산(50%) + 트레일링")
+trailMult   = input.float(1.5, "트레일링 = ATR ×", minval=0.5, maxval=3.0, step=0.25)
+cooldownBars = input.int(2, "재진입 대기 봉 수", minval=0, maxval=20)
+useSession  = input.bool(true, "세션 필터 (스프레드 좋은 시간만)")
 tradeSession = input.session("0700-2000", "거래 세션 (런던+뉴욕)")
 sessionTZ    = input.string("GMT", "세션 시간대")
 
-// ── 지표 계산 ──────────────────────────────────────────
-emaTrend = ta.ema(close, emaTrendLen)
-rsi2     = ta.rsi(close, 2)
-rsi14    = ta.rsi(close, 14)
+// ── 지표 ────────────────────────────────────────────────
 atrVal   = ta.atr(atrLen)
-[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+emaMean  = ta.ema(close, meanLen)
+vwapMean = ta.vwap(hlc3)
+mean     = meanType == "VWAP" ? (na(vwapMean) ? emaMean : vwapMean) : emaMean
+stretch  = atrVal > 0 ? (close - mean) / atrVal : 0.0
+rsiFast  = ta.rsi(close, rsiLen)
+rsi14    = ta.rsi(close, 14)
+emaTrend = ta.ema(close, 200)
 
-bbBasis = ta.sma(close, bbLen)
-bbDev   = bbMult * ta.stdev(close, bbLen)
-bbUpper = bbBasis + bbDev
-bbLower = bbBasis - bbDev
+sessionTime = time(timeframe.period, tradeSession, sessionTZ)
+inSession = not useSession or not na(sessionTime)
 
-inSession = not na(time(timeframe.period, tradeSession, sessionTZ))
-calmMarket = adxVal <= adxMax   // 폭주 추세(역행 위험)가 아닐 때만
+// ── 진입 조건 ───────────────────────────────────────────
+rsiOKLong  = not useRsi or rsiFast < rsiBuyMax
+rsiOKShort = not useRsi or rsiFast > rsiSellMin
+trendOKLong  = not useTrendFilter or close > emaTrend
+trendOKShort = not useTrendFilter or close < emaTrend
 
-// ── 진입 조건 (Connors 스타일 평균회귀) ─────────────────
-// 매수: 장기 상승추세 + RSI(2) 극단 과매도 (+옵션: 볼린저 하단 이탈)
-longSignal  = inSession and calmMarket and close > emaTrend and rsi2 < rsiBuyLvl  and (not useBB or close < bbLower)
-// 매도: 장기 하락추세 + RSI(2) 극단 과매수 (+옵션: 볼린저 상단 이탈)
-shortSignal = inSession and calmMarket and close < emaTrend and rsi2 > rsiSellLvl and (not useBB or close > bbUpper)
+barsSinceExit = strategy.closedtrades > 0 ? bar_index - strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) : cooldownBars + 1
+cooldownOK = barsSinceExit >= cooldownBars
 
-longSL  = close - atrVal * slMult
-longTP  = close + atrVal * tpMult
-shortSL = close + atrVal * slMult
-shortTP = close - atrVal * tpMult
+longSignal  = inSession and cooldownOK and stretch <= -stretchMult and rsiOKLong  and trendOKLong
+shortSignal = inSession and cooldownOK and stretch >=  stretchMult and rsiOKShort and trendOKShort
 
-// ── 청산 조건: RSI(2) 중립 복귀 (고승률의 핵심) ─────────
-exitLong  = ta.crossover(rsi2, rsiExitLvl)    // 롱: RSI2가 50 위로 회복
-exitShort = ta.crossunder(rsi2, rsiExitLvl)   // 숏: RSI2가 50 아래로 하락
+// ── 포지션 상태 관리 ────────────────────────────────────
+var float stopLvl = na
+var bool  tookPartial = false
 
-// ── 백테스트 매매 ───────────────────────────────────────
-if longSignal and strategy.position_size <= 0
+if strategy.position_size == 0
+    tookPartial := false
+
+entryPrice = strategy.opentrades > 0 ? strategy.opentrades.entry_price(strategy.opentrades - 1) : na
+
+// ── 진입 ────────────────────────────────────────────────
+if longSignal and strategy.position_size == 0
     strategy.entry("Long", strategy.long)
-    strategy.exit("Long X", "Long", stop=longSL, limit=longTP)
+    stopLvl := close - atrVal * slMult
 
-if shortSignal and strategy.position_size >= 0
+if shortSignal and strategy.position_size == 0
     strategy.entry("Short", strategy.short)
-    strategy.exit("Short X", "Short", stop=shortSL, limit=shortTP)
+    stopLvl := close + atrVal * slMult
 
-// RSI 중립 복귀 시 조기 청산 (작은 이익 확보 → 승률 상승)
-if strategy.position_size > 0 and exitLong
-    strategy.close("Long", comment="RSI복귀")
-if strategy.position_size < 0 and exitShort
-    strategy.close("Short", comment="RSI복귀")
+// ── 적응형 청산 스택 ────────────────────────────────────
+crossUpMean = ta.crossover(close, mean)
+crossDnMean = ta.crossunder(close, mean)
 
-// 세션 종료 시 전량 청산 (당일 청산 원칙)
-sessionEnded = inSession[1] and not inSession
+if strategy.position_size > 0 and not na(entryPrice)
+    // 2) Break Even: 1×ATR 유리 → 손절 본전
+    if high >= entryPrice + atrVal * beTrigger
+        stopLvl := math.max(stopLvl, entryPrice)
+    // 1) Dynamic TP: 기준선 복귀 시 청산
+    if crossUpMean
+        if usePartial and not tookPartial
+            strategy.close("Long", qty_percent=50, comment="TP1@mean")
+            tookPartial := true
+            stopLvl := math.max(stopLvl, entryPrice)
+        else if not usePartial
+            strategy.close("Long", comment="TP@mean")
+    // 3) Trailing: 부분청산 후 나머지 트레일
+    if tookPartial
+        stopLvl := math.max(stopLvl, close - atrVal * trailMult)
+    strategy.exit("L-X", "Long", stop=stopLvl)
+
+if strategy.position_size < 0 and not na(entryPrice)
+    if low <= entryPrice - atrVal * beTrigger
+        stopLvl := math.min(stopLvl, entryPrice)
+    if crossDnMean
+        if usePartial and not tookPartial
+            strategy.close("Short", qty_percent=50, comment="TP1@mean")
+            tookPartial := true
+            stopLvl := math.min(stopLvl, entryPrice)
+        else if not usePartial
+            strategy.close("Short", comment="TP@mean")
+    if tookPartial
+        stopLvl := math.min(stopLvl, close + atrVal * trailMult)
+    strategy.exit("S-X", "Short", stop=stopLvl)
+
+// 세션 종료 시 전량 청산 (안전장치)
+sessionEnded = useSession and not na(sessionTime[1]) and na(sessionTime)
 if sessionEnded
-    strategy.close_all(comment="당일청산")
+    strategy.close_all(comment="세션청산")
 
 // ── Webhook JSON (실거래용) ─────────────────────────────
+// 서버는 BUY/SELL일 때만 AI 처리, HOLD는 무시 → 크레딧 절약
+// 실거래 청산: exit_long/exit_short(기준선 복귀) 신호로 서버가 전량 청산
 sigAction = sessionEnded ? "CLOSE_ALL" : longSignal ? "BUY" : shortSignal ? "SELL" : "HOLD"
-sl_ = sigAction == "SELL" ? shortSL : longSL
-tp_ = sigAction == "SELL" ? shortTP : longTP
+sl_ = sigAction == "SELL" ? close + atrVal * slMult : close - atrVal * slMult
+tp_ = mean   // Dynamic TP = 현재 기준선
 trendStr = close > emaTrend ? "bullish" : "bearish"
 
 buildJson(action, slv, tpv) =>
@@ -102,25 +148,23 @@ buildJson(action, slv, tpv) =>
       ', "action": "' + action + '"' +
       ', "price": ' + str.tostring(close, "#.#####") +
       ', "market_structure": "' + trendStr + '"' +
-      ', "rsi2": ' + str.tostring(rsi2, "#.#") +
+      ', "stretch": ' + str.tostring(stretch, "#.##") +
+      ', "mean": ' + str.tostring(mean, "#.#####") +
+      ', "rsi2": ' + str.tostring(rsiFast, "#.#") +
       ', "rsi": ' + str.tostring(rsi14, "#.#") +
-      ', "adx": ' + str.tostring(adxVal, "#.#") +
-      ', "bb_lower": ' + str.tostring(bbLower, "#.#####") +
-      ', "bb_upper": ' + str.tostring(bbUpper, "#.#####") +
       ', "atr": ' + str.tostring(atrVal, "#.#####") +
       ', "in_session": ' + (inSession ? "true" : "false") +
-      ', "exit_long": ' + (exitLong ? "true" : "false") +
-      ', "exit_short": ' + (exitShort ? "true" : "false") +
+      ', "exit_long": ' + (crossUpMean ? "true" : "false") +
+      ', "exit_short": ' + (crossDnMean ? "true" : "false") +
       ', "sl": ' + str.tostring(slv, "#.#####") +
       ', "tp": ' + str.tostring(tpv, "#.#####") +
       ', "timeframe": "' + timeframe.period + '"}'
 
 alert(buildJson(sigAction, sl_, tp_), alert.freq_once_per_bar_close)
 
-// ── 차트 시각화 ─────────────────────────────────────────
-plot(emaTrend, "EMA200", color.red, 2)
-plot(bbUpper, "BB 상단", color.new(color.blue, 60))
-plot(bbLower, "BB 하단", color.new(color.blue, 60))
+// ── 시각화 ──────────────────────────────────────────────
+plot(mean, "기준선", color.orange, 2)
+plot(emaTrend, "EMA200", color.new(color.red, 40), 1)
 bgcolor(inSession ? na : color.new(color.gray, 92))
-plotshape(longSignal,  "LONG",  shape.triangleup,   location.belowbar, color.green, size=size.small)
-plotshape(shortSignal, "SHORT", shape.triangledown, location.abovebar, color.red,   size=size.small)
+plotshape(longSignal,  "LONG",  shape.triangleup,   location.belowbar, color.green, size=size.tiny)
+plotshape(shortSignal, "SHORT", shape.triangledown, location.abovebar, color.red,   size=size.tiny)

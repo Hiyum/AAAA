@@ -25,6 +25,16 @@ class Config:
     # False: MT5 자체 차트 스캔 전략도 병행
     TRADINGVIEW_ONLY = True
 
+    # ── Claude AI 크레딧 절약 설정 (스캘핑 최적화) ──────────────
+    # AI_CONFIRM_ENTRIES:
+    #   True  = Pine이 BUY/SELL 신호를 보낼 때만 AI가 최종 검증 (HOLD 봉은 AI 호출 안 함)
+    #   False = AI 검증 생략, Pine 신호 즉시 실행 (크레딧 0, 지연 0 - 초고빈도용)
+    AI_CONFIRM_ENTRIES = True
+    # AI_MONITOR_POSITIONS:
+    #   True  = 열린 포지션을 매 봉 AI가 판단 (크레딧 많이 소모)
+    #   False = 규칙 기반 관리 (Pine의 RSI복귀 청산 신호 + SL/TP) - 스캘핑 권장
+    AI_MONITOR_POSITIONS = False
+
     # ── 데이트레이딩 설정 (당일 청산 / 세션 거래) ──────────────
     # 거래 세션 (UTC 기준). 런던+뉴욕 = 07:00~20:00
     TRADE_SESSION_START_HOUR = 7    # UTC

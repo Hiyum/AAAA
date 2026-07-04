@@ -203,9 +203,24 @@ class TradingEngine:
         if len(all_positions) >= self.max_open_positions:
             return {"message": f"최대 포지션({self.max_open_positions}) 도달 - 진입 보류"}
 
-        self.log(f"[TV 진입분석] {symbol} @ {price} - Claude AI 판단 중...")
-        decision = self.ai.analyze_tradingview(payload)
-        self.log(f"[AI 진입판단] {decision['action']} | 신뢰도 {decision.get('confidence', 0):.0%} | {decision.get('reasoning', '')}")
+        # ── 크레딧 절약 핵심: Pine이 BUY/SELL 신호를 보냈을 때만 처리 ──
+        # HOLD 봉(대부분)은 AI 호출 없이 즉시 반환 → API 호출 ~95% 감소
+        signal = str(payload.get("action", "HOLD")).upper()
+        if signal not in ("BUY", "SELL"):
+            return {"message": "신호 없음(HOLD) - AI 미호출"}
+
+        if not getattr(Config, "AI_CONFIRM_ENTRIES", True):
+            # AI 검증 생략 모드: Pine 신호 즉시 실행 (크레딧 0, 지연 0)
+            decision = {
+                "action": signal, "confidence": 1.0,
+                "reasoning": "Pine 신호 직접 실행 (AI 검증 생략 모드)",
+                "stop_loss": payload.get("sl", 0), "take_profit": payload.get("tp", 0),
+            }
+            self.log(f"[TV 신호] {signal} {symbol} @ {price} - 직접 실행 (AI 생략)")
+        else:
+            self.log(f"[TV 진입분석] {signal} {symbol} @ {price} - Claude AI 검증 중...")
+            decision = self.ai.analyze_tradingview(payload)
+            self.log(f"[AI 진입판단] {decision['action']} | 신뢰도 {decision.get('confidence', 0):.0%} | {decision.get('reasoning', '')}")
 
         action = str(decision.get("action", "HOLD")).upper()
         if action not in ("BUY", "SELL") or decision.get("confidence", 0) < 0.6:
@@ -231,6 +246,13 @@ class TradingEngine:
 
     def _tv_manage_positions(self, positions: list, payload: dict) -> dict:
         """포지션 있을 때: TradingView 데이터로 주시/청산/손절이동 판단"""
+        # 스캘핑 모드: AI 주시 생략 (크레딧 절약)
+        # 청산은 Pine의 exit_long/exit_short 신호(process_tradingview에서 선처리) + MT5 SL/TP가 담당
+        if not getattr(Config, "AI_MONITOR_POSITIONS", True):
+            total_profit = sum(p.get("profit", 0) for p in positions)
+            sign = "+" if total_profit >= 0 else ""
+            return {"message": f"포지션 {len(positions)}개 유지 - 규칙 기반 관리 (AI 미호출) | 손익 {sign}{total_profit:.2f}$"}
+
         results = []
         for pos in positions:
             ticket = pos["ticket"]
