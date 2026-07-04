@@ -36,11 +36,35 @@ class RiskManager:
                 return 0.02
         return self.risk_per_trade
 
+    # 신뢰도 → lot 배수 등급표 (Claude AI confidence 기반)
+    # 확신이 클수록 과감하게, 단 하드캡(계좌의 5% 리스크) 안에서만.
+    # "100% 보장"은 존재하지 않으므로 무제한 베팅은 절대 하지 않음.
+    CONFIDENCE_TIERS = [
+        (0.92, 3.0),   # 초고신뢰 (드물어야 정상)
+        (0.85, 2.0),   # 고신뢰
+        (0.75, 1.5),   # 중상
+        (0.65, 1.0),   # 기본
+        (0.00, 0.5),   # 저신뢰 → 절반
+    ]
+    MAX_RISK_HARD_CAP = 0.05   # 어떤 경우에도 한 거래 리스크는 잔고의 5% 이하
+
+    def confidence_multiplier(self, confidence: float) -> float:
+        for threshold, mult in self.CONFIDENCE_TIERS:
+            if confidence >= threshold:
+                return mult
+        return 0.5
+
     def calculate_lot_size(self, account_balance: float, entry_price: float,
-                           stop_loss: float, pip_value: float = 1.0) -> float:
+                           stop_loss: float, pip_value: float = 1.0,
+                           confidence: float = 0.65) -> float:
+        mult = self.confidence_multiplier(confidence)
+
+        # 고정 lot 모드: 고정값 × 신뢰도 배수
         if self.fixed_lot > 0:
-            return self.fixed_lot
-        risk_pct = self.get_risk_per_trade(account_balance)
+            return round(max(0.01, min(self.fixed_lot * mult, 10.0)), 2)
+
+        # 리스크 % 모드: (기본 리스크 × 신뢰도 배수), 하드캡 5%
+        risk_pct = min(self.get_risk_per_trade(account_balance) * mult, self.MAX_RISK_HARD_CAP)
         risk_amount = account_balance * risk_pct
         sl_distance = abs(entry_price - stop_loss)
         if sl_distance <= 0:

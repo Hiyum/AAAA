@@ -7,7 +7,6 @@ import queue
 import threading
 
 from core.trading_engine import TradingEngine
-from core.backtest import Backtester
 from config import Config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -25,7 +24,6 @@ def broadcast_log(entry: dict):
 
 
 engine = TradingEngine(log_callback=broadcast_log)
-backtester = Backtester(mt5_connector=engine.mt5)
 
 
 # ─── Routes ────────────────────────────────────────────────
@@ -91,25 +89,16 @@ def update_risk():
 
 @app.route("/api/reload_strategy", methods=["POST"])
 def reload_strategy():
-    success = engine.reload_strategy()
-    return jsonify({"success": success})
+    # TradingView 전용 모드: 전략은 TradingView Pine Script에서 관리됨
+    return jsonify({"success": True,
+                    "message": "전략은 TradingView Pine Script에서 관리됩니다. 차트에서 스크립트를 수정하세요."})
 
 
 @app.route("/api/backtest", methods=["POST"])
 def run_backtest():
-    data = request.json or {}
-    symbol = data.get("symbol", "XAUUSD")
-    days = int(data.get("days", 30))
-    balance = float(data.get("balance", 10000))
-
-    if not engine.strategy:
-        engine.load_strategy(symbol)
-
-    if not engine.strategy:
-        return jsonify({"error": "전략 로드 실패"})
-
-    result = backtester.run(engine.strategy, symbol, days, balance)
-    return jsonify(result)
+    # 백테스트는 TradingView Strategy Tester가 담당 (더 정확한 데이터/체결 모델)
+    return jsonify({"error": "백테스트는 TradingView Strategy Tester에서 실행하세요. "
+                             "차트에 전략 추가 → 하단 Strategy Tester 탭"})
 
 
 @app.route("/webhook/tradingview", methods=["POST"])
