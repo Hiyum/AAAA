@@ -30,10 +30,8 @@ class TradingEngine:
         self.active = False
         self.current_symbol = None
         self.trade_history = []
-        # 멀티에셋: 종목당 1개씩, 전체 최대 3개 (금/BTC/AUDUSD)
-        # 종목당 1개 제한은 process_tradingview의 라우팅이 보장
-        # (해당 종목 포지션이 있으면 진입이 아니라 관리로 분기됨)
-        self.max_open_positions = 3
+        # AUDUSD 전용 데이트레이딩: 동시 1포지션
+        self.max_open_positions = 1
         self.latest_tv_data: Dict[str, Any] = {}
         self.session_thread: Optional[threading.Thread] = None
 
