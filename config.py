@@ -31,9 +31,11 @@ class Config:
     # 거래 세션 (UTC 기준). 런던+뉴욕 = 07:00~20:00
     TRADE_SESSION_START_HOUR = 7    # UTC
     TRADE_SESSION_END_HOUR = 20     # UTC
-    # 당일 청산 시각 (UTC). 이 시각에 모든 포지션 자동 청산 (오버나이트 금지)
+    # 당일 청산 시각 (UTC). 이 시각에 모든 포지션 자동 청산
     DAILY_FLATTEN_HOUR = 20         # UTC
-    ENFORCE_DAY_CLOSE = True        # 당일 청산 강제 여부
+    # False = 24시간 거래 (세션 차단/정시 청산 없음)
+    # 포지션 장기화는 MAX_POSITION_MINUTES 시간손절이 대신 막음
+    ENFORCE_DAY_CLOSE = False
     # 포지션 최대 보유 시간(분): 초과 시 서버가 직접 청산
     # (TradingView/ngrok 신호가 끊겨도 작동하는 독립 안전망. 15분봉 10봉 = 150분)
     MAX_POSITION_MINUTES = 150

@@ -41,19 +41,20 @@ strategy("ClaudeAI AUDUSD DayTrade v4", overlay=true,
 
 // ── 입력 ────────────────────────────────────────────────
 symbolName  = input.string("AUDUSD", "MT5 종목명 (브로커 표기)")
-// 백테스트 근거: 무조건 숏은 PF 0.79로 손실 주범. 하락추세에서만 허용.
-shortsNeedDowntrend = input.bool(true, "숏은 하락추세(EMA200 아래)에서만")
+// 롱/숏 균형 규칙: 상승장(EMA200 위)=롱만, 하락장(아래)=숏만
+// "아무때나"가 아니라 시장 상황이 방향을 정한다 (무조건 숏은 PF 0.79 손실이었음)
+trendAlign  = input.bool(true, "추세 정렬 (롱=EMA200 위 / 숏=아래)")
 rsiLen      = input.int(2, "빠른 RSI 기간", minval=2, maxval=5)
 rsiBuyLvl   = input.float(25.0, "매수 진입 RSI 이하 (완화=거래↑)", minval=5, maxval=40)
 rsiSellLvl  = input.float(75.0, "매도 진입 RSI 이상 (완화=거래↑)", minval=60, maxval=95)
-useTrendFilter = input.bool(false, "EMA200 추세 필터 (거래↓ 승률↑)")
 atrLen      = input.int(14, "ATR 기간")
 slMult      = input.float(4.0, "재해 손절 = ATR × (넓을수록 승률↑, 손실 시 큼)", minval=2.0, maxval=6.0, step=0.5)
 beTrigger   = input.float(0.75, "본전 이동 트리거 = ATR ×", minval=0.25, maxval=2.0, step=0.25)
 fpcBuffer   = input.float(0.05, "수익 마감 버퍼 = ATR × (스프레드 커버)", minval=0.0, maxval=0.3, step=0.05)
 maxBarsHold = input.int(10, "시간 손절 (봉 수) - 백테스트 근거: 패자는 평균 12봉을 끔", minval=4, maxval=96)
 cooldownBars = input.int(1, "재진입 대기 봉 수", minval=0, maxval=10)
-tradeSession = input.session("0700-2000", "거래 세션 (런던+뉴욕)")
+useSession  = input.bool(false, "세션 필터 (OFF=24시간 거래)")
+tradeSession = input.session("0700-2000", "거래 세션 (필터 ON일 때만)")
 sessionTZ    = input.string("GMT", "세션 시간대")
 
 // ── 지표 ────────────────────────────────────────────────
@@ -63,18 +64,18 @@ rsi14    = ta.rsi(close, 14)
 emaTrend = ta.ema(close, 200)
 
 sessionTime = time(timeframe.period, tradeSession, sessionTZ)
-inSession = not na(sessionTime)
+inSession = not useSession or not na(sessionTime)
 
 // ── 진입 조건 (완화 - 빈도 우선) ────────────────────────
-trendOKLong  = not useTrendFilter or close > emaTrend
-trendOKShort = not useTrendFilter or close < emaTrend
+// 추세 정렬: 상승장=롱 / 하락장=숏 (시장이 방향을 정한다)
+longOK  = not trendAlign or close > emaTrend
+shortOK = not trendAlign or close < emaTrend
 
 barsSinceExit = strategy.closedtrades > 0 ? bar_index - strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) : cooldownBars + 1
 cooldownOK = barsSinceExit >= cooldownBars
 
-shortRegimeOK = not shortsNeedDowntrend or close < emaTrend
-longSignal  = inSession and cooldownOK and rsiFast < rsiBuyLvl  and trendOKLong
-shortSignal = inSession and cooldownOK and rsiFast > rsiSellLvl and trendOKShort and shortRegimeOK
+longSignal  = inSession and cooldownOK and rsiFast < rsiBuyLvl  and longOK
+shortSignal = inSession and cooldownOK and rsiFast > rsiSellLvl and shortOK
 
 // ── 포지션 상태 ─────────────────────────────────────────
 var float stopLvl = na
@@ -122,7 +123,7 @@ if strategy.position_size < 0 and not na(entryPrice)
     strategy.exit("S-X", "Short", stop=stopLvl)
 
 // 세션 종료: 전량 청산 (데이트레이딩)
-sessionEnded = not na(sessionTime[1]) and na(sessionTime)
+sessionEnded = useSession and not na(sessionTime[1]) and na(sessionTime)
 if sessionEnded
     strategy.close_all(comment="당일청산")
 
