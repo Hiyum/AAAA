@@ -17,9 +17,11 @@ class Config:
     DEFAULT_DAILY_LOSS_LIMIT = 0.05  # 5% daily loss limit (manual mode)
 
     # Supported symbols (MT5 registered)
-    # ※ 브로커마다 외환 종목명이 다를 수 있음 (EURUSD / EURUSD# / EURUSD.r 등)
+    # ※ 브로커마다 종목명이 다름 (GOLD# / XAUUSD, BTCUSD / BTCUSD# 등)
     #   MT5 Market Watch에서 정확한 이름 확인 후 맞추세요.
-    PRIORITY_SYMBOLS = ["AUDUSD"]
+    #   TradingView 차트 3개(금/BTC/AUDUSD)에 각각 전략+알람을 만들고
+    #   각 차트의 symbolName 입력을 아래 브로커 표기와 일치시킬 것.
+    PRIORITY_SYMBOLS = ["GOLD#", "BTCUSD", "AUDUSD"]
 
     # ── Claude AI 호출 정책 ─────────────────────────────────────
     # True  = Pine이 BUY/SELL 신호를 보낼 때만 AI가 최종 검증 + 신뢰도 산정
