@@ -39,6 +39,7 @@ strategy("ClaudeAI AUDUSD DayTrade v4", overlay=true,
 
 // ── 입력 ────────────────────────────────────────────────
 symbolName  = input.string("AUDUSD", "MT5 종목명 (브로커 표기)")
+longOnly    = input.bool(true, "롱 전용 (백테스트 근거: 숏 PF 0.79로 손실 주범)")
 rsiLen      = input.int(2, "빠른 RSI 기간", minval=2, maxval=5)
 rsiBuyLvl   = input.float(25.0, "매수 진입 RSI 이하 (완화=거래↑)", minval=5, maxval=40)
 rsiSellLvl  = input.float(75.0, "매도 진입 RSI 이상 (완화=거래↑)", minval=60, maxval=95)
@@ -47,7 +48,7 @@ atrLen      = input.int(14, "ATR 기간")
 slMult      = input.float(4.0, "재해 손절 = ATR × (넓을수록 승률↑, 손실 시 큼)", minval=2.0, maxval=6.0, step=0.5)
 beTrigger   = input.float(0.75, "본전 이동 트리거 = ATR ×", minval=0.25, maxval=2.0, step=0.25)
 fpcBuffer   = input.float(0.05, "수익 마감 버퍼 = ATR × (스프레드 커버)", minval=0.0, maxval=0.3, step=0.05)
-maxBarsHold = input.int(24, "시간 손절 (봉 수, 15분봉 24=6시간)", minval=4, maxval=96)
+maxBarsHold = input.int(10, "시간 손절 (봉 수) - 백테스트 근거: 패자는 평균 12봉을 끔", minval=4, maxval=96)
 cooldownBars = input.int(1, "재진입 대기 봉 수", minval=0, maxval=10)
 tradeSession = input.session("0700-2000", "거래 세션 (런던+뉴욕)")
 sessionTZ    = input.string("GMT", "세션 시간대")
@@ -69,7 +70,7 @@ barsSinceExit = strategy.closedtrades > 0 ? bar_index - strategy.closedtrades.ex
 cooldownOK = barsSinceExit >= cooldownBars
 
 longSignal  = inSession and cooldownOK and rsiFast < rsiBuyLvl  and trendOKLong
-shortSignal = inSession and cooldownOK and rsiFast > rsiSellLvl and trendOKShort
+shortSignal = not longOnly and inSession and cooldownOK and rsiFast > rsiSellLvl and trendOKShort
 
 // ── 포지션 상태 ─────────────────────────────────────────
 var float stopLvl = na

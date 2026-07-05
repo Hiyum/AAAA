@@ -1,3 +1,5 @@
+import os
+import json
 import time
 import logging
 import threading
@@ -35,6 +37,13 @@ class TradingEngine:
         self.latest_tv_data: Dict[str, Any] = {}
         self.session_thread: Optional[threading.Thread] = None
 
+        # 동시성/중복 방지
+        self._entry_lock = threading.Lock()      # 알람 동시 도착 시 이중 주문 방지
+        self._last_entry_key = ""                # 중복 알람 무시용
+        self._last_entry_time = 0.0
+
+        self._load_history()
+
         # SL/TP 실시간 관리 파라미터 (ATR 배수)
         self.be_trigger = 1.0    # 이만큼 유리해지면 손절을 본전으로
         self.trail_start = 1.5   # 이만큼 유리해지면 트레일링 시작
@@ -62,10 +71,12 @@ class TradingEngine:
         self.log("→ 분석: TradingView | 판단: Claude AI | 주문·청산: MT5", "INFO")
         self.log("→ 매 봉 SL/TP 자동 관리: 본전 이동 + ATR 트레일링", "INFO")
 
+        # 유지관리 루프는 항상 가동 (당일청산 + 일일리셋 + 시간손절 안전망)
+        self.session_thread = threading.Thread(target=self._session_guard_loop, daemon=True)
+        self.session_thread.start()
         if getattr(Config, "ENFORCE_DAY_CLOSE", False):
-            self.session_thread = threading.Thread(target=self._session_guard_loop, daemon=True)
-            self.session_thread.start()
             self.log(f"→ 당일 청산 활성화: 매일 {Config.DAILY_FLATTEN_HOUR}:00 UTC 전 포지션 청산", "INFO")
+        self.log(f"→ 안전망: 포지션 {getattr(Config, 'MAX_POSITION_MINUTES', 150)}분 초과 시 서버가 직접 청산", "INFO")
 
         return {"success": True, "message": "AI 자동매매 시작됨"}
 
@@ -116,8 +127,21 @@ class TradingEngine:
         if not self._in_trading_session():
             return {"message": "거래 세션 밖 - 신규 진입 보류"}
 
+        # 중복 알람 방지: 같은 종목+방향 신호가 60초 내 재도착하면 무시
+        # (TradingView 재전송, ngrok 재연결 시 이중 주문 사고 차단)
+        entry_key = f"{symbol}|{action}"
+        if entry_key == self._last_entry_key and time.time() - self._last_entry_time < 60:
+            return {"message": "중복 신호 무시 (60초 내 동일 신호)"}
+
         if len(self.mt5.get_open_positions()) >= self.max_open_positions:
             return {"message": f"최대 포지션({self.max_open_positions}) 도달 - 진입 보류"}
+
+        # 일일 손실 한도 확인 (한도 초과 시 그날 거래 중단)
+        balance_now = self.mt5.get_account_info().get("balance", 0)
+        gate = self.risk.can_trade(balance_now)
+        if not gate["allowed"]:
+            self.log(f"[거래 차단] {gate['reason']}", "WARNING")
+            return {"message": f"거래 차단: {gate['reason']}"}
 
         # Claude AI 검증 (신뢰도가 lot 크기를 결정)
         if getattr(Config, "AI_CONFIRM_ENTRIES", True):
@@ -143,14 +167,22 @@ class TradingEngine:
         lot = self.risk.calculate_lot_size(balance, price, sl, confidence=confidence)
         self.log(f"[Lot 산정] 신뢰도 {confidence:.0%} → {lot} lot (잔고 ${balance:.0f})")
 
-        result = self.mt5.place_order(symbol, final, lot, price, sl, tp, comment="ClaudeAI-TV")
+        # 락으로 이중 주문 방지 (AI 응답 대기 중 다른 알람이 도착하는 경우)
+        with self._entry_lock:
+            if len(self.mt5.get_open_positions()) >= self.max_open_positions:
+                return {"message": "락 재확인: 이미 포지션 존재 - 진입 취소"}
+            result = self.mt5.place_order(symbol, final, lot, price, sl, tp, comment="ClaudeAI-TV")
+
         if result["success"]:
+            self._last_entry_key = f"{symbol}|{final}"
+            self._last_entry_time = time.time()
             self.trade_history.append({
                 "time": datetime.now().isoformat(), "symbol": symbol, "action": final,
                 "lot": lot, "entry_price": price, "sl": result.get("sl"), "tp": result.get("tp"),
                 "ticket": result.get("ticket"), "reasoning": decision.get("reasoning", ""),
                 "confidence": confidence, "profit": 0, "status": "OPEN", "source": "TradingView",
             })
+            self._save_history()
             self.log(f"[주문 완료] {final} {symbol} {lot}lot @ {price} #티켓{result.get('ticket')}", "SUCCESS")
         else:
             self.log(f"[주문 실패] {result.get('message')}", "ERROR")
@@ -252,20 +284,79 @@ class TradingEngine:
         return (start <= hour < end) if start <= end else (hour >= start or hour < end)
 
     def _session_guard_loop(self):
-        """매일 지정 시각(UTC)에 전 포지션 청산하는 안전장치"""
+        """60초마다 도는 유지관리 루프 (webhook과 독립적인 안전장치):
+        ① 당일 청산 시각에 전 포지션 청산
+        ② UTC 날짜 변경 시 일일 손실 카운터 리셋 (그날 기준잔고 갱신)
+        ③ 포지션 시간 손절: TradingView 신호가 끊겨도(ngrok 다운 등)
+           일정 시간 초과 포지션은 서버가 직접 청산
+        """
         last_flatten_date = None
+        last_reset_date = datetime.now(timezone.utc).date()
+        max_hold_sec = getattr(Config, "MAX_POSITION_MINUTES", 150) * 60
+
         while self.active:
             try:
                 now = datetime.now(timezone.utc)
-                if now.hour == Config.DAILY_FLATTEN_HOUR and last_flatten_date != now.date():
-                    if self.mt5.connected and self.mt5.get_open_positions():
-                        self._close_all_positions(f"당일 청산 시각({Config.DAILY_FLATTEN_HOUR}:00 UTC)")
-                    last_flatten_date = now.date()
+
+                # ① 당일 청산
+                if getattr(Config, "ENFORCE_DAY_CLOSE", False):
+                    if now.hour == Config.DAILY_FLATTEN_HOUR and last_flatten_date != now.date():
+                        if self.mt5.connected and self.mt5.get_open_positions():
+                            self._close_all_positions(f"당일 청산 시각({Config.DAILY_FLATTEN_HOUR}:00 UTC)")
+                        last_flatten_date = now.date()
+
+                # ② 일일 리스크 리셋 (새 날 = 새 기준잔고)
+                if now.date() != last_reset_date:
+                    self.risk.reset_daily()
+                    balance = self.mt5.get_account_info().get("balance", 0)
+                    if balance > 0:
+                        self.risk.set_initial_balance(balance)
+                    self.log(f"[일일 리셋] 새 거래일 시작 - 기준잔고 ${balance:.2f}")
+                    last_reset_date = now.date()
+
+                # ③ 포지션 시간 손절 (webhook 독립 안전망)
+                if self.mt5.connected:
+                    for pos in self.mt5.get_open_positions():
+                        opened = self._find_entry_time(pos["ticket"])
+                        if opened and (now - opened).total_seconds() > max_hold_sec:
+                            self.log(f"[시간 손절] #{pos['ticket']} 보유 {max_hold_sec//60}분 초과 - 서버 강제 청산", "WARNING")
+                            r = self.mt5.close_position(pos["ticket"])
+                            if r["success"]:
+                                self._record_closed(pos["ticket"], pos.get("profit", 0))
             except Exception as e:
-                logger.error(f"세션 가드 오류: {e}")
+                logger.error(f"유지관리 루프 오류: {e}")
             time.sleep(60)
 
+    def _find_entry_time(self, ticket: int) -> Optional[datetime]:
+        for t in self.trade_history:
+            if t.get("ticket") == ticket and t.get("status") == "OPEN":
+                try:
+                    dt = datetime.fromisoformat(t["time"])
+                    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+                except Exception:
+                    return None
+        return None
+
     # ── 기록/상태 ───────────────────────────────────────────
+
+    def _load_history(self):
+        """앱 재시작 후에도 거래 내역 유지"""
+        try:
+            if os.path.exists(Config.LOG_FILE):
+                with open(Config.LOG_FILE, "r", encoding="utf-8") as f:
+                    self.trade_history = json.load(f)
+                logger.info(f"거래 내역 {len(self.trade_history)}건 로드됨")
+        except Exception as e:
+            logger.warning(f"거래 내역 로드 실패: {e}")
+            self.trade_history = []
+
+    def _save_history(self):
+        try:
+            os.makedirs(os.path.dirname(Config.LOG_FILE), exist_ok=True)
+            with open(Config.LOG_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.trade_history[-500:], f, ensure_ascii=False, indent=1)
+        except Exception as e:
+            logger.warning(f"거래 내역 저장 실패: {e}")
 
     def _record_closed(self, ticket: int, profit: float):
         for t in self.trade_history:
@@ -274,6 +365,7 @@ class TradingEngine:
                 t["profit"] = round(profit, 2)
                 break
         self.risk.record_trade_result(profit)
+        self._save_history()
 
     def get_status(self) -> Dict[str, Any]:
         account = self.mt5.get_account_info() if self.mt5.connected else {}
