@@ -31,15 +31,18 @@
 //  [붙여넣기 전] Pine Editor 전부 삭제(Ctrl+A→Delete) 후 붙여넣기
 //  백테스트는 Deep Backtesting으로 6개월 이상 돌릴 것.
 // =============================================================
+// 자본 $100 기준 백테스트: 주문 $1,500 노셔널 = 0.015 lot ≈ 15:1 레버리지
+// (qty를 키우면 수익도 낙폭도 비례해서 커짐 - $100 계좌에서 DD가 $50 넘으면 위험)
 strategy("ClaudeAI AUDUSD DayTrade v4", overlay=true,
-     initial_capital=10000,
-     default_qty_type=strategy.cash, default_qty_value=10000,
+     initial_capital=100,
+     default_qty_type=strategy.cash, default_qty_value=1500,
      commission_type=strategy.commission.percent, commission_value=0.0,
      slippage=1, process_orders_on_close=true)
 
 // ── 입력 ────────────────────────────────────────────────
 symbolName  = input.string("AUDUSD", "MT5 종목명 (브로커 표기)")
-longOnly    = input.bool(true, "롱 전용 (백테스트 근거: 숏 PF 0.79로 손실 주범)")
+// 백테스트 근거: 무조건 숏은 PF 0.79로 손실 주범. 하락추세에서만 허용.
+shortsNeedDowntrend = input.bool(true, "숏은 하락추세(EMA200 아래)에서만")
 rsiLen      = input.int(2, "빠른 RSI 기간", minval=2, maxval=5)
 rsiBuyLvl   = input.float(25.0, "매수 진입 RSI 이하 (완화=거래↑)", minval=5, maxval=40)
 rsiSellLvl  = input.float(75.0, "매도 진입 RSI 이상 (완화=거래↑)", minval=60, maxval=95)
@@ -69,8 +72,9 @@ trendOKShort = not useTrendFilter or close < emaTrend
 barsSinceExit = strategy.closedtrades > 0 ? bar_index - strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) : cooldownBars + 1
 cooldownOK = barsSinceExit >= cooldownBars
 
+shortRegimeOK = not shortsNeedDowntrend or close < emaTrend
 longSignal  = inSession and cooldownOK and rsiFast < rsiBuyLvl  and trendOKLong
-shortSignal = not longOnly and inSession and cooldownOK and rsiFast > rsiSellLvl and trendOKShort
+shortSignal = inSession and cooldownOK and rsiFast > rsiSellLvl and trendOKShort and shortRegimeOK
 
 // ── 포지션 상태 ─────────────────────────────────────────
 var float stopLvl = na

@@ -83,6 +83,26 @@ class MT5Connector:
         })
         return self.account_info
 
+    def get_symbol_specs(self, symbol: str) -> Dict[str, float]:
+        """종목 계약 스펙 (lot 계산에 필수).
+        contract_size: 1 lot의 기초자산 수량 (외환 100,000 / 금 보통 100)
+        """
+        if not self.simulation_mode and MT5_AVAILABLE:
+            info = mt5.symbol_info(symbol)
+            if info is not None:
+                return {
+                    "contract_size": float(info.trade_contract_size or 100000.0),
+                    "volume_min": float(info.volume_min or 0.01),
+                    "volume_max": float(info.volume_max or 100.0),
+                    "volume_step": float(info.volume_step or 0.01),
+                }
+        # 시뮬레이션/조회실패 폴백: 6자리 알파벳이면 외환으로 간주
+        is_fx = len(symbol.replace("#", "").replace(".", "")) == 6 and symbol[:6].isalpha()
+        return {
+            "contract_size": 100000.0 if is_fx else 100.0,
+            "volume_min": 0.01, "volume_max": 100.0, "volume_step": 0.01,
+        }
+
     def get_current_price(self, symbol: str) -> Optional[float]:
         if self.simulation_mode:
             prices = {"XAUUSD": 2350.0, "BTCUSD": 65000.0, "ETHUSD": 3500.0, "XAGUSD": 28.5}

@@ -164,8 +164,15 @@ class TradingEngine:
         tp = float(decision.get("take_profit") or (price * 1.01 if final == "BUY" else price * 0.99))
 
         # 신뢰도 기반 동적 lot: 확신이 클수록 크게, 단 하드캡 안에서
-        lot = self.risk.calculate_lot_size(balance, price, sl, confidence=confidence)
-        self.log(f"[Lot 산정] 신뢰도 {confidence:.0%} → {lot} lot (잔고 ${balance:.0f})")
+        # 종목 계약크기 반영 (외환 100,000 / 금 100) + 브로커 최소/스텝 단위로 정규화
+        specs = self.mt5.get_symbol_specs(symbol)
+        raw_lot = self.risk.calculate_lot_size(balance, price, sl, confidence=confidence,
+                                               contract_size=specs["contract_size"])
+        step = specs["volume_step"]
+        lot = max(specs["volume_min"], int(raw_lot / step) * step)
+        lot = round(min(lot, specs["volume_max"]), 2)
+        risk_now = abs(price - sl) * specs["contract_size"] * lot
+        self.log(f"[Lot 산정] 신뢰도 {confidence:.0%} → {lot} lot | 이 거래 최대 리스크 ${risk_now:.2f} (잔고 ${balance:.0f})")
 
         # 락으로 이중 주문 방지 (AI 응답 대기 중 다른 알람이 도착하는 경우)
         with self._entry_lock:

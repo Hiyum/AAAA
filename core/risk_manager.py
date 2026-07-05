@@ -55,8 +55,13 @@ class RiskManager:
         return 0.5
 
     def calculate_lot_size(self, account_balance: float, entry_price: float,
-                           stop_loss: float, pip_value: float = 1.0,
-                           confidence: float = 0.65) -> float:
+                           stop_loss: float, confidence: float = 0.65,
+                           contract_size: float = 100000.0) -> float:
+        """
+        리스크 금액 기반 lot 계산.
+        1 lot 손실액 = 손절거리 × 계약크기(외환 100,000 / 금 100)
+        ※ 이전 버전은 금 기준(×100) 고정이라 외환에서 1000배 과대 주문 버그 있었음.
+        """
         mult = self.confidence_multiplier(confidence)
 
         # 고정 lot 모드: 고정값 × 신뢰도 배수
@@ -67,10 +72,11 @@ class RiskManager:
         risk_pct = min(self.get_risk_per_trade(account_balance) * mult, self.MAX_RISK_HARD_CAP)
         risk_amount = account_balance * risk_pct
         sl_distance = abs(entry_price - stop_loss)
-        if sl_distance <= 0:
+        if sl_distance <= 0 or contract_size <= 0:
             return 0.01
-        lot = round(risk_amount / (sl_distance * pip_value * 100), 2)
-        return max(0.01, min(lot, 10.0))
+        risk_per_lot = sl_distance * contract_size
+        lot = risk_amount / risk_per_lot
+        return max(0.0, lot)   # 최소단위 반올림은 엔진이 종목 스펙으로 처리
 
     def can_trade(self, account_balance: float) -> Dict[str, Any]:
         if self.initial_balance <= 0:
