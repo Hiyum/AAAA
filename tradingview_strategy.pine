@@ -44,6 +44,10 @@ sessionTZ   = input.string("GMT", "시간대")
 winnerHold  = input.bool(true, "승자 오버나이트 허용 (본전 잠금 후 며칠이고 보유)")
 usePullback = input.bool(true, "진입B: 추세 눌림목 (빈도↑)")
 trendAlign  = input.bool(true, "EMA200 방향 일치 필수")
+// v6.1: 롱 PF 0.822 원인 = 하락장 가짜반등 롱. EMA50-200 이중 정렬로 차단
+strongAlign = input.bool(true, "강한 추세 정렬 (EMA50-200 이중, 가짜반등 차단)")
+adxLen      = input.int(14, "ADX 기간")
+adxMin      = input.float(20.0, "눌림목 진입 최소 ADX (횡보장 눌림목 차단)", minval=10, maxval=40)
 bufMult     = input.float(0.10, "돌파 버퍼 = ATR ×", step=0.05)
 minRangeAtr = input.float(0.5, "최소 레인지 = ATR ×", step=0.1)
 maxRangeAtr = input.float(4.0, "최대 레인지 = ATR ×", step=0.5)
@@ -57,8 +61,10 @@ cooldownBars = input.int(4, "재진입 대기 봉 수", minval=0, maxval=20)
 // ── 지표 ────────────────────────────────────────────────
 atrVal   = ta.atr(atrLen)
 emaFast  = ta.ema(close, 20)
+emaMid   = ta.ema(close, 50)
 emaTrend = ta.ema(close, 200)
 rsi14    = ta.rsi(close, 14)
+[diP, diM, adxVal] = ta.dmi(adxLen, adxLen)
 
 inAsian  = not na(time(timeframe.period, asianSess, sessionTZ))
 inWindow = not na(time(timeframe.period, tradeSess, sessionTZ))
@@ -80,8 +86,9 @@ rangeOK = not na(rangeW) and rangeW >= atrVal * minRangeAtr and rangeW <= atrVal
 
 // ── 진입 조건 ───────────────────────────────────────────
 buf = atrVal * bufMult
-alignL = not trendAlign or close > emaTrend
-alignS = not trendAlign or close < emaTrend
+// 강한 정렬: 가격이 EMA200 위 + EMA50도 EMA200 위 (진짜 상승장에서만 롱)
+alignL = (not trendAlign or close > emaTrend) and (not strongAlign or emaMid > emaTrend)
+alignS = (not trendAlign or close < emaTrend) and (not strongAlign or emaMid < emaTrend)
 
 barsSinceExit = strategy.closedtrades > 0 ? bar_index - strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) : cooldownBars + 1
 cooldownOK = barsSinceExit >= cooldownBars
@@ -90,9 +97,10 @@ cooldownOK = barsSinceExit >= cooldownBars
 orbLong  = rangeOK and close > aHi + buf and close[1] <= aHi + buf
 orbShort = rangeOK and close < aLo - buf and close[1] >= aLo - buf
 
-// B) 추세 눌림목: EMA20 아래로 눌렸다가 재돌파 (추세 중간 합류)
-pbLong  = usePullback and close > emaTrend and ta.crossover(close, emaFast)
-pbShort = usePullback and close < emaTrend and ta.crossunder(close, emaFast)
+// B) 추세 눌림목: EMA20 되눌림 후 재돌파 + ADX 확인 (횡보장 눌림목 차단)
+pbTrending = adxVal >= adxMin
+pbLong  = usePullback and pbTrending and close > emaTrend and ta.crossover(close, emaFast)
+pbShort = usePullback and pbTrending and close < emaTrend and ta.crossunder(close, emaFast)
 
 longSignal  = inWindow and not inAsian and cooldownOK and alignL and (orbLong or pbLong)
 shortSignal = inWindow and not inAsian and cooldownOK and alignS and (orbShort or pbShort)
@@ -158,13 +166,16 @@ sl_ = sigAction == "SELL" ? shortSL : longSL
 riskNow = sigAction == "SELL" ? (shortSL - close) : (close - longSL)
 tp_ = sigAction == "SELL" ? close - riskNow * 3 : close + riskNow * 3
 trendStr = close > emaTrend ? "bullish" : "bearish"
+entryType = (orbLong or orbShort) ? "ORB" : "PULLBACK"
 
 buildJson(action, slv, tpv) =>
     '{"symbol": "' + symbolName + '"' +
       ', "action": "' + action + '"' +
       ', "mode": "GOLD_TREND"' +
+      ', "entry_type": "' + entryType + '"' +
       ', "price": ' + str.tostring(close, format.mintick) +
       ', "market_structure": "' + trendStr + '"' +
+      ', "adx": ' + str.tostring(adxVal, "#.#") +
       ', "asian_high": ' + str.tostring(na(aHi) ? close : aHi, format.mintick) +
       ', "asian_low": ' + str.tostring(na(aLo) ? close : aLo, format.mintick) +
       ', "rsi": ' + str.tostring(rsi14, "#.#") +

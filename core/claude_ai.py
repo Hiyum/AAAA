@@ -46,11 +46,11 @@ class ClaudeAI:
                 "take_profit": payload.get("tp", 0),
             }
 
-        prompt = f"""당신은 금(XAUUSD) 아시안 레인지 돌파(ORB) 전문 AI입니다.
-전략: 아시아 세션(00-07 GMT)의 축적 레인지를 런던/뉴욕 시간에 돌파할 때
-추세 방향으로 진입해 트레일링으로 추세를 추종합니다.
-Pine Script가 이미 돌파 신호(action)를 보냈고, 당신의 역할은
-명백히 나쁜 돌파(가짜돌파 징후)만 걸러내는 것입니다 (과도한 개입 금지).
+        prompt = f"""당신은 금(XAUUSD) 추세 트레이딩 전문 AI입니다 (Trend Rider).
+전략: ① 아시안 레인지 돌파(ORB) ② 추세 눌림목 재돌파(PULLBACK) 두 가지로 진입,
+승자는 트레일링으로 며칠이고 태우고 패자는 당일 자릅니다.
+Pine이 이미 신호(action)를 보냈고, 당신의 역할은 나쁜 신호를 거르고(HOLD)
+좋은 신호에 힘을 실어주는 것(높은 confidence → 큰 lot)입니다.
 
 종목: {symbol}
 현재가: {price}
@@ -58,14 +58,17 @@ Pine Script가 이미 돌파 신호(action)를 보냈고, 당신의 역할은
 ═══ TradingView 분석 데이터 ═══
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
-═══ 검증 기준 (금 돌파) ═══
-1. 기본적으로 Pine 신호(action)를 존중하세요. 확실한 반대 근거가 있을 때만 HOLD.
-2. market_structure가 신호 방향과 일치(매수=bullish)하면 신뢰도 가산
-3. range_atr_ratio가 1~3 사이면 정상 레인지 → 가산. 4 이상이면 이미 과열 → 감산
-4. rsi가 극단(매수인데 80+, 매도인데 20-)이면 추격 위험 → 신뢰도 감산
-5. ATR 대비 비정상 단일 캔들(뉴스 스파이크)로 보이면 HOLD
-6. in_session=false면 HOLD
-7. 돌파는 절반이 가짜입니다. 애매하면 confidence를 낮추세요.
+═══ 검증 기준 (금 추세) ═══
+1. 기본적으로 Pine 신호(action)를 존중. 확실한 반대 근거가 있을 때만 HOLD.
+2. market_structure가 신호 방향과 일치(매수=bullish/매도=bearish) → 가산.
+   불일치면 강하게 감산 (역추세 진입은 이 전략의 손실 주범)
+3. adx 25+ = 추세 강함 → 가산 / 15 미만 = 횡보 → 감산 또는 HOLD
+4. entry_type=ORB: 돌파 방향이 아시안 레인지에서 자연스러운지
+   entry_type=PULLBACK: 추세 지속 국면인지 (adx와 함께 판단)
+5. rsi 극단(매수인데 80+, 매도인데 20-)이면 추격 위험 → 감산
+6. ATR 대비 비정상 단일 캔들(뉴스 스파이크)이면 HOLD
+7. in_session=false면 HOLD
+8. 애매하면 confidence를 낮추는 것이 정답입니다.
 
 ═══ confidence 보정 (중요: 이 값이 거래 크기를 직접 결정합니다) ═══
 - confidence에 따라 lot이 커집니다: 0.65 미만=0.5배, 0.65~0.75=1배, 0.75~0.85=1.5배, 0.85~0.92=2배, 0.92+=3배
