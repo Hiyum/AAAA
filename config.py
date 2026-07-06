@@ -17,8 +17,8 @@ class Config:
     DEFAULT_DAILY_LOSS_LIMIT = 0.05  # 5% daily loss limit (manual mode)
 
     # Supported symbols (MT5 registered)
-    # ※ 브로커 표기 확인 필수 (AUDUSD / AUDUSD# 등)
-    PRIORITY_SYMBOLS = ["AUDUSD"]
+    # ※ 브로커 표기 확인 필수 (GOLD# / XAUUSD 등)
+    PRIORITY_SYMBOLS = ["GOLD#"]
 
     # ── Claude AI 호출 정책 ─────────────────────────────────────
     # True  = Pine이 BUY/SELL 신호를 보낼 때만 AI가 최종 검증 + 신뢰도 산정
@@ -31,14 +31,12 @@ class Config:
     # 거래 세션 (UTC 기준). 런던+뉴욕 = 07:00~20:00
     TRADE_SESSION_START_HOUR = 7    # UTC
     TRADE_SESSION_END_HOUR = 20     # UTC
-    # 당일 청산 시각 (UTC). 이 시각에 모든 포지션 자동 청산
+    # 당일 청산 시각 (UTC). 이 시각에 모든 포지션 자동 청산 (금 오버나이트 갭 방지)
     DAILY_FLATTEN_HOUR = 20         # UTC
-    # False = 24시간 거래 (세션 차단/정시 청산 없음)
-    # 포지션 장기화는 MAX_POSITION_MINUTES 시간손절이 대신 막음
-    ENFORCE_DAY_CLOSE = False
-    # 포지션 최대 보유 시간(분): 초과 시 서버가 직접 청산
-    # (TradingView/ngrok 신호가 끊겨도 작동하는 독립 안전망. 15분봉 10봉 = 150분)
-    MAX_POSITION_MINUTES = 150
+    ENFORCE_DAY_CLOSE = True
+    # 포지션 최대 보유 시간(분): 초과 시 서버가 직접 청산 (독립 안전망)
+    # 돌파 추세는 몇 시간을 태워야 하므로 넉넉히 (20:00 UTC 청산이 상한)
+    MAX_POSITION_MINUTES = 600
 
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
     LOG_FILE = "logs/trades.json"
