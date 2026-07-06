@@ -32,8 +32,8 @@ class TradingEngine:
         self.active = False
         self.current_symbol = None
         self.trade_history = []
-        # 포트폴리오: 종목당 1개(라우팅이 보장), 전체 최대 2개 (GOLD# + AUDUSD)
-        self.max_open_positions = 2
+        # GOLD 단일 집중: 동시 1포지션
+        self.max_open_positions = 1
         self.latest_tv_data: Dict[str, Any] = {}
         self.session_thread: Optional[threading.Thread] = None
 
@@ -44,10 +44,10 @@ class TradingEngine:
 
         self._load_history()
 
-        # SL/TP 실시간 관리 파라미터 (ATR 배수)
+        # SL/TP 실시간 관리 파라미터 (ATR 배수) - Trend Rider: 넓게 태운다
         self.be_trigger = 1.0    # 이만큼 유리해지면 손절을 본전으로
         self.trail_start = 1.5   # 이만큼 유리해지면 트레일링 시작
-        self.trail_dist = 1.2    # 트레일링 간격
+        self.trail_dist = 2.0    # 트레일링 간격 (넓게 = 추세 오래 탐)
         self.min_adjust = 0.05   # 이보다 작은 변화는 수정 요청 안 함 (브로커 부담 방지)
 
     def log(self, message: str, level: str = "INFO"):
@@ -322,11 +322,14 @@ class TradingEngine:
                     last_reset_date = now.date()
 
                 # ③ 포지션 시간 손절 (webhook 독립 안전망)
+                #    단, '손실 중'인 포지션만. 승자는 며칠이고 태운다 (Trend Rider 규칙)
                 if self.mt5.connected:
                     for pos in self.mt5.get_open_positions():
+                        if pos.get("profit", 0) >= 0:
+                            continue   # 승자/본전은 건드리지 않음
                         opened = self._find_entry_time(pos["ticket"])
                         if opened and (now - opened).total_seconds() > max_hold_sec:
-                            self.log(f"[시간 손절] #{pos['ticket']} 보유 {max_hold_sec//60}분 초과 - 서버 강제 청산", "WARNING")
+                            self.log(f"[시간 손절] #{pos['ticket']} 손실 상태로 {max_hold_sec//60}분 초과 - 서버 강제 청산", "WARNING")
                             r = self.mt5.close_position(pos["ticket"])
                             if r["success"]:
                                 self._record_closed(pos["ticket"], pos.get("profit", 0))

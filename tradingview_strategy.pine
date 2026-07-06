@@ -1,33 +1,35 @@
 //@version=5
 // =============================================================
-//  ClaudeAI GOLD ORB v5 — 아시안 레인지 돌파 (금 전용 정석 전략)
+//  ClaudeAI GOLD Trend Rider v6 — 숲을 보는 금 전략
 // =============================================================
-//  대상: GOLD (XAUUSD) / 권장: 15분봉 / 오버나이트 금지
+//  전용: GOLD (XAUUSD) / 15분봉 / 진입 2종 + 승자 오버나이트
 //
-//  ── 설계 철학: 금의 성격에 맞춘다 ───────────────────────
-//  금은 평균회귀가 아니라 추세·돌파의 시장이다 (과거 실패의 교훈).
-//  문서화된 금 인트라데이 정석 = 아시안 레인지 돌파:
-//   · 아시아 세션(00-07 GMT): 금은 좁은 레인지에 축적
-//   · 런던/뉴욕(07-17 GMT): 그 레인지를 돌파하며 크게 움직임
-//     (평균 돌파 주행거리가 레인지의 1.5~2배)
+//  ── 바탕이 된 트레이더들 ────────────────────────────────
+//  · Richard Dennis (터틀): 레인지/채널 돌파 진입
+//  · Ed Seykota / Paul Tudor Jones: "손실은 즉시 잘라라,
+//    이익은 달리게 두라" - 승자는 며칠이고 보유, 패자는 당일 청산
+//  · 세션 ORB: 아시안 축적 → 런던/뉴욕 확장 (금 인트라데이 정석)
 //
-//  ── 정직한 기대치 ───────────────────────────────────────
-//  이 구조의 승률은 40~55%다. 대신 손익비가 2~3배라 돈을 번다.
-//  (고승률 전략의 정반대 - 금에서는 이게 유일하게 작동하는 방향)
-//  판단 기준: 승률이 아니라 Profit Factor(1.3+)와 MaxDD.
+//  ── 진입 (2종, 문턱 낮춤 → 하루 여러 번) ────────────────
+//  A) ORB 돌파: 아시안 레인지 돌파 (재진입 허용 - 하루 제한 없음)
+//  B) 추세 눌림목: EMA200 방향 + EMA20 되눌림 후 재돌파
+//     → 돌파 놓쳐도 추세 중간에 계속 올라탈 수 있음
 //
-//  ── 규칙 ────────────────────────────────────────────────
-//  진입: 런던/뉴욕 시간에 아시안 고점 상향돌파=롱 / 저점 하향=숏
-//        + EMA200 방향 일치(가짜돌파 필터) + 레인지 품질 필터
-//        + 방향별 하루 1회만
-//  손절: 아시안 레인지 반대편 (최대 2.5×ATR 캡)
-//  청산: 1R에서 50% 부분익절 + 본전 잠금 → 나머지 2×ATR 트레일링
-//        20:00 GMT 전량 청산 (오버나이트 금지)
+//  ── 청산 (숲의 규칙) ────────────────────────────────────
+//  1R 도달 → 50% 익절 + 손절 본전 잠금
+//  → 이후 2×ATR 트레일링으로 추세 끝까지
+//  20:00 GMT 판정: 패자(본전 미달)만 청산.
+//    승자(본전 잠금됨)는 오버나이트/며칠이고 계속 태움
+//    ※ 승자는 손절이 본전 이상이므로 밤새 최악이어도 손실 전환 불가
+//  금요일 20:00: 전량 청산 (주말 갭 방어)
 //
-//  ⚠ 백테스트: 6개월+ / 커미션에 스프레드 반영(금은 크다, ~0.01%)
+//  ── 정직한 기대 프로필 ──────────────────────────────────
+//  승률 45~60% × 손익비 2~4. 승률로 벌지 않고 큰 추세로 법니다.
+//  판단 지표: Profit Factor / MaxDD / 순수익 (승률 아님)
+//
 //  [붙여넣기 전] Pine Editor 전부 삭제(Ctrl+A→Delete)
 // =============================================================
-strategy("ClaudeAI GOLD ORB v5", overlay=true,
+strategy("ClaudeAI GOLD Trend Rider v6", overlay=true,
      initial_capital=100,
      default_qty_type=strategy.cash, default_qty_value=1500,
      commission_type=strategy.commission.percent, commission_value=0.01,
@@ -36,41 +38,39 @@ strategy("ClaudeAI GOLD ORB v5", overlay=true,
 // ── 입력 ────────────────────────────────────────────────
 symbolName  = input.string("GOLD#", "MT5 종목명 (브로커 표기)")
 asianSess   = input.session("0000-0700", "아시안 레인지 세션 (GMT)")
-tradeSess   = input.session("0700-1700", "돌파 진입 허용 시간 (GMT)")
-flattenSess = input.session("0700-2000", "보유 허용 시간 - 끝나면 전량 청산 (GMT)")
+tradeSess   = input.session("0700-1700", "진입 허용 시간 (GMT)")
+flattenSess = input.session("0700-2000", "패자 청산 판정 시간 (GMT)")
 sessionTZ   = input.string("GMT", "시간대")
-trendAlign  = input.bool(true, "EMA200 방향 일치 필수 (가짜돌파 필터)")
-bufMult     = input.float(0.10, "돌파 확정 버퍼 = ATR ×", minval=0.0, maxval=0.5, step=0.05)
-minRangeAtr = input.float(0.8, "최소 레인지 = ATR × (너무 좁으면 노이즈)", minval=0.2, maxval=3.0, step=0.1)
-maxRangeAtr = input.float(4.0, "최대 레인지 = ATR × (뉴스밤 제외)", minval=2.0, maxval=8.0, step=0.5)
+winnerHold  = input.bool(true, "승자 오버나이트 허용 (본전 잠금 후 며칠이고 보유)")
+usePullback = input.bool(true, "진입B: 추세 눌림목 (빈도↑)")
+trendAlign  = input.bool(true, "EMA200 방향 일치 필수")
+bufMult     = input.float(0.10, "돌파 버퍼 = ATR ×", step=0.05)
+minRangeAtr = input.float(0.5, "최소 레인지 = ATR ×", step=0.1)
+maxRangeAtr = input.float(4.0, "최대 레인지 = ATR ×", step=0.5)
 atrLen      = input.int(14, "ATR 기간")
-slCapAtr    = input.float(2.5, "손절 최대 캡 = ATR ×", minval=1.0, maxval=5.0, step=0.25)
-tp1R        = input.float(1.0, "부분익절(50%) = 리스크 R ×", minval=0.5, maxval=3.0, step=0.25)
-trailAtr    = input.float(2.0, "트레일링 = ATR ×", minval=1.0, maxval=4.0, step=0.25)
+slCapAtr    = input.float(2.5, "ORB 손절 캡 = ATR ×", step=0.25)
+pbSlAtr     = input.float(2.0, "눌림목 손절 = ATR ×", step=0.25)
+tp1R        = input.float(1.0, "부분익절(50%) = R ×", step=0.25)
+trailAtr    = input.float(2.0, "트레일링 = ATR × (넓을수록 추세 오래 탐)", step=0.25)
+cooldownBars = input.int(4, "재진입 대기 봉 수", minval=0, maxval=20)
 
 // ── 지표 ────────────────────────────────────────────────
 atrVal   = ta.atr(atrLen)
+emaFast  = ta.ema(close, 20)
 emaTrend = ta.ema(close, 200)
 rsi14    = ta.rsi(close, 14)
 
-inAsian   = not na(time(timeframe.period, asianSess, sessionTZ))
-inWindow  = not na(time(timeframe.period, tradeSess, sessionTZ))
-holdTime  = time(timeframe.period, flattenSess, sessionTZ)
-inHold    = not na(holdTime)
+inAsian  = not na(time(timeframe.period, asianSess, sessionTZ))
+inWindow = not na(time(timeframe.period, tradeSess, sessionTZ))
+holdTime = time(timeframe.period, flattenSess, sessionTZ)
 
-// ── 아시안 레인지 집계 (매일 리셋) ──────────────────────
+// ── 아시안 레인지 (매일 리셋) ───────────────────────────
 isNewDay = ta.change(time("D")) != 0
 var float aHi = na
 var float aLo = na
-var bool tookLong = false
-var bool tookShort = false
-
 if isNewDay
     aHi := na
     aLo := na
-    tookLong := false
-    tookShort := false
-
 if inAsian
     aHi := na(aHi) ? high : math.max(aHi, high)
     aLo := na(aLo) ? low : math.min(aLo, low)
@@ -78,25 +78,33 @@ if inAsian
 rangeW = not na(aHi) and not na(aLo) ? aHi - aLo : na
 rangeOK = not na(rangeW) and rangeW >= atrVal * minRangeAtr and rangeW <= atrVal * maxRangeAtr
 
-// ── 돌파 진입 조건 ──────────────────────────────────────
+// ── 진입 조건 ───────────────────────────────────────────
 buf = atrVal * bufMult
 alignL = not trendAlign or close > emaTrend
 alignS = not trendAlign or close < emaTrend
 
-longSignal  = inWindow and not inAsian and rangeOK and not tookLong  and alignL and close > aHi + buf and close[1] <= aHi + buf
-shortSignal = inWindow and not inAsian and rangeOK and not tookShort and alignS and close < aLo - buf and close[1] >= aLo - buf
+barsSinceExit = strategy.closedtrades > 0 ? bar_index - strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) : cooldownBars + 1
+cooldownOK = barsSinceExit >= cooldownBars
 
-// 손절: 레인지 반대편, 최대 slCapAtr×ATR 캡
-longSLraw  = not na(aLo) ? aLo : close - atrVal * slCapAtr
-shortSLraw = not na(aHi) ? aHi : close + atrVal * slCapAtr
-longSL  = math.max(longSLraw,  close - atrVal * slCapAtr)
-shortSL = math.min(shortSLraw, close + atrVal * slCapAtr)
+// A) ORB 돌파 (하루 횟수 제한 없음 - 쿨다운만)
+orbLong  = rangeOK and close > aHi + buf and close[1] <= aHi + buf
+orbShort = rangeOK and close < aLo - buf and close[1] >= aLo - buf
+
+// B) 추세 눌림목: EMA20 아래로 눌렸다가 재돌파 (추세 중간 합류)
+pbLong  = usePullback and close > emaTrend and ta.crossover(close, emaFast)
+pbShort = usePullback and close < emaTrend and ta.crossunder(close, emaFast)
+
+longSignal  = inWindow and not inAsian and cooldownOK and alignL and (orbLong or pbLong)
+shortSignal = inWindow and not inAsian and cooldownOK and alignS and (orbShort or pbShort)
+
+// 손절: ORB는 레인지 반대편(캡), 눌림목은 2×ATR
+longSL  = orbLong  ? math.max(not na(aLo) ? aLo : close - atrVal * slCapAtr, close - atrVal * slCapAtr) : close - atrVal * pbSlAtr
+shortSL = orbShort ? math.min(not na(aHi) ? aHi : close + atrVal * slCapAtr, close + atrVal * slCapAtr) : close + atrVal * pbSlAtr
 
 // ── 포지션 상태 ─────────────────────────────────────────
 var float stopLvl = na
 var float riskAmt = na
 var bool tookPartial = false
-
 if strategy.position_size == 0
     tookPartial := false
 
@@ -107,28 +115,24 @@ if longSignal and strategy.position_size == 0
     strategy.entry("Long", strategy.long)
     stopLvl := longSL
     riskAmt := close - longSL
-    tookLong := true
 
 if shortSignal and strategy.position_size == 0
     strategy.entry("Short", strategy.short)
     stopLvl := shortSL
     riskAmt := shortSL - close
-    tookShort := true
 
-// ── 청산 스택 (돌파형: 부분익절 + 본전 + 트레일링) ──────
-if strategy.position_size > 0 and not na(entryPrice) and not na(riskAmt)
-    tp1 = entryPrice + riskAmt * tp1R
-    if not tookPartial and high >= tp1
+// ── 청산 스택 ───────────────────────────────────────────
+if strategy.position_size > 0 and not na(entryPrice) and not na(riskAmt) and riskAmt > 0
+    if not tookPartial and high >= entryPrice + riskAmt * tp1R
         strategy.close("Long", qty_percent=50, comment="TP1")
         tookPartial := true
-        stopLvl := math.max(stopLvl, entryPrice)   // 본전 잠금
+        stopLvl := math.max(stopLvl, entryPrice)   // 본전 잠금 → 이후 무손실
     if tookPartial
         stopLvl := math.max(stopLvl, close - atrVal * trailAtr)
     strategy.exit("L-X", "Long", stop=stopLvl)
 
-if strategy.position_size < 0 and not na(entryPrice) and not na(riskAmt)
-    tp1s = entryPrice - riskAmt * tp1R
-    if not tookPartial and low <= tp1s
+if strategy.position_size < 0 and not na(entryPrice) and not na(riskAmt) and riskAmt > 0
+    if not tookPartial and low <= entryPrice - riskAmt * tp1R
         strategy.close("Short", qty_percent=50, comment="TP1")
         tookPartial := true
         stopLvl := math.min(stopLvl, entryPrice)
@@ -136,28 +140,33 @@ if strategy.position_size < 0 and not na(entryPrice) and not na(riskAmt)
         stopLvl := math.min(stopLvl, close + atrVal * trailAtr)
     strategy.exit("S-X", "Short", stop=stopLvl)
 
-// 보유 시간 종료: 전량 청산 (오버나이트 금지)
+// ── 일일 판정 (숲의 규칙): 패자만 자르고 승자는 태운다 ───
 holdEnded = not na(holdTime[1]) and na(holdTime)
-if holdEnded
-    strategy.close_all(comment="당일청산")
+isFriday = dayofweek(time, sessionTZ) == dayofweek.friday
 
-// ── Webhook JSON (실거래용) ─────────────────────────────
-sigAction = holdEnded ? "CLOSE_ALL" : longSignal ? "BUY" : shortSignal ? "SELL" : "HOLD"
+longIsWinner  = strategy.position_size > 0 and not na(entryPrice) and stopLvl >= entryPrice
+shortIsWinner = strategy.position_size < 0 and not na(entryPrice) and stopLvl <= entryPrice
+isWinner = longIsWinner or shortIsWinner
+
+flattenNow = holdEnded and strategy.position_size != 0 and (isFriday or not winnerHold or not isWinner)
+if flattenNow
+    strategy.close_all(comment=isFriday ? "주말청산" : "패자청산")
+
+// ── Webhook JSON ────────────────────────────────────────
+sigAction = flattenNow ? "CLOSE_ALL" : longSignal ? "BUY" : shortSignal ? "SELL" : "HOLD"
 sl_ = sigAction == "SELL" ? shortSL : longSL
-// 서버 안전망 TP: 2R 지점 (주 청산은 서버의 본전이동+트레일링)
 riskNow = sigAction == "SELL" ? (shortSL - close) : (close - longSL)
-tp_ = sigAction == "SELL" ? close - riskNow * 2 : close + riskNow * 2
+tp_ = sigAction == "SELL" ? close - riskNow * 3 : close + riskNow * 3
 trendStr = close > emaTrend ? "bullish" : "bearish"
 
 buildJson(action, slv, tpv) =>
     '{"symbol": "' + symbolName + '"' +
       ', "action": "' + action + '"' +
-      ', "mode": "GOLD_ORB"' +
+      ', "mode": "GOLD_TREND"' +
       ', "price": ' + str.tostring(close, format.mintick) +
       ', "market_structure": "' + trendStr + '"' +
       ', "asian_high": ' + str.tostring(na(aHi) ? close : aHi, format.mintick) +
       ', "asian_low": ' + str.tostring(na(aLo) ? close : aLo, format.mintick) +
-      ', "range_atr_ratio": ' + str.tostring(na(rangeW) ? 0 : rangeW / atrVal, "#.##") +
       ', "rsi": ' + str.tostring(rsi14, "#.#") +
       ', "atr": ' + str.tostring(atrVal, format.mintick) +
       ', "in_session": ' + (inWindow ? "true" : "false") +
@@ -168,8 +177,9 @@ buildJson(action, slv, tpv) =>
 alert(buildJson(sigAction, sl_, tp_), alert.freq_once_per_bar_close)
 
 // ── 시각화 ──────────────────────────────────────────────
-plot(inHold and not na(aHi) ? aHi : na, "아시안 고점", color.aqua, 2, plot.style_linebr)
-plot(inHold and not na(aLo) ? aLo : na, "아시안 저점", color.aqua, 2, plot.style_linebr)
+plot(not na(aHi) ? aHi : na, "아시안 고점", color.aqua, 2, plot.style_linebr)
+plot(not na(aLo) ? aLo : na, "아시안 저점", color.aqua, 2, plot.style_linebr)
+plot(emaFast, "EMA20", color.orange, 1)
 plot(emaTrend, "EMA200", color.new(color.red, 40), 1)
 bgcolor(inAsian ? color.new(color.yellow, 92) : inWindow ? na : color.new(color.gray, 93))
 plotshape(longSignal,  "LONG",  shape.triangleup,   location.belowbar, color.green, size=size.small)

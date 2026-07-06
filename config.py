@@ -17,11 +17,9 @@ class Config:
     DEFAULT_DAILY_LOSS_LIMIT = 0.05  # 5% daily loss limit (manual mode)
 
     # Supported symbols (MT5 registered)
-    # 포트폴리오 운용: 검증된 두 전략을 동시에
-    #  - GOLD#  : GOLD ORB v5 (12개월 검증, 연 +32.8%, PF 1.155)
-    #  - AUDUSD : DayTrade v4.1 (3개월 검증, PF 1.248)
-    # ※ 브로커 표기 확인 필수 (GOLD# / GOLD, AUDUSD / AUDUSD# 등)
-    PRIORITY_SYMBOLS = ["GOLD#", "AUDUSD"]
+    # GOLD 단일 집중 (Trend Rider v6)
+    # ※ 브로커 표기 확인 필수 (GOLD# 인지 GOLD 인지 Market Watch에서)
+    PRIORITY_SYMBOLS = ["GOLD#"]
 
     # ── Claude AI 호출 정책 ─────────────────────────────────────
     # True  = Pine이 BUY/SELL 신호를 보낼 때만 AI가 최종 검증 + 신뢰도 산정
@@ -37,11 +35,12 @@ class Config:
     # 거래 세션 (UTC 기준). 런던+뉴욕 = 07:00~20:00
     TRADE_SESSION_START_HOUR = 7    # UTC
     TRADE_SESSION_END_HOUR = 20     # UTC
-    # 당일 청산 시각 (UTC). 이 시각에 모든 포지션 자동 청산 (금 오버나이트 갭 방지)
-    DAILY_FLATTEN_HOUR = 20         # UTC
-    ENFORCE_DAY_CLOSE = True
-    # 포지션 최대 보유 시간(분): 초과 시 서버가 직접 청산 (독립 안전망)
-    # 돌파 추세는 몇 시간을 태워야 하므로 넉넉히 (20:00 UTC 청산이 상한)
+    # 승자 오버나이트 정책 (Trend Rider v6):
+    #  - 서버 정시 청산 없음 (Pine이 20:00 GMT에 '패자만' CLOSE_ALL 전송)
+    #  - 승자(본전 잠금)는 며칠이고 트레일링으로 계속 보유
+    DAILY_FLATTEN_HOUR = 20         # UTC (Pine 판정 시각과 동일)
+    ENFORCE_DAY_CLOSE = False
+    # 시간 손절 안전망: '손실 중인' 포지션만 대상 (승자는 예외 - 계속 태움)
     MAX_POSITION_MINUTES = 600
 
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
