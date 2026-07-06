@@ -1,136 +1,69 @@
 //@version=5
 // =============================================================
-//  ClaudeAI GOLD Funnel v8 — 후보는 자주, 판단은 Claude AI
+//  ClaudeAI GOLD Regime Fade v9 — 데이터가 가르쳐준 금의 본질
 // =============================================================
-//  대상: GOLD (XAUUSD) / 15분봉
+//  대상: GOLD (XAUUSD) / 15분봉 / EMA 게이트 없음
 //
-//  ── 피처 구성 (실제 vs 근사 정직 표기) ──────────────────
-//  · Market Structure : 실제 (스윙 HH/HL vs LH/LL + BOS)
-//  · Liquidity Sweep  : 실제 (스윙/아시안 저점 스윕 후 회귀)
-//  · VWAP             : 실제 (세션 앵커드)
-//  · Volume Profile   : 근사 (거래량 가중 POC, 50봉)
-//  · CVD              : 근사 (틱볼륨 델타 누적 - 업계 표준 방식)
-//  · Order Flow/Footprint: 근사 (봉 델타 불균형 EMA)
-//    ※ 진짜 풋프린트 원시 데이터는 Pine에서 접근 불가 (사실)
+//  ── 111일 × 10,665봉 연구로 실측한 금의 본질 ────────────
+//  ① 금은 '레짐'이 전부다: 20일 평균 아래(약세)에선 반등이
+//     죽고(급등 후 4h 기대값 -0.62 ATR), 위에선 반대
+//  ② 함정 = 레짐 역행 추격: 약세장 급등 추격 롱이 최악
+//  ③ 이익구간 = 레짐 방향 되돌림: 약세장에서 3h +0.8 ATR
+//     급등이 나오면 그 되돌림 숏이 최고 기대값
+//  ④ 시간대 필터는 불필요 (급등 조건이 있으면 어느 시간이든 유효)
 //
-//  ── 진입: 합류점 점수제 (7점 만점) ──────────────────────
-//  구조+BOS+스윕+CVD+오더플로우+VWAP+POC 중 N개 일치 시 진입
-//  ⚠ 비대칭 문턱 (12개월×2기간 데이터 근거):
-//    숏 = 4점 (두 기간 모두 PF 1.34/1.76 흑자 → 기회 많이)
-//    롱 = 5점 (두 기간 모두 PF 0.82/0.62 적자 → 엄격하게)
+//  ── 규칙 (전부 데이터 최적화: 486조합 탐색) ─────────────
+//  레짐: 일봉 20일 SMA 위=강세 / 아래=약세
+//  진입: 약세장 + 직전 3h(12봉) 상승 ≥ 0.8×ATR → 숏 (되돌림)
+//        강세장 + 직전 3h 하락 ≥ 0.8×ATR → 롱 (미러, 주의: 검증창이
+//        약세장이라 롱 방향은 12개월 백테스트로 교차검증 필요)
+//  손절: 2.0×ATR / 부분익절: 0.5R에서 50% + 본전 잠금
+//  트레일: 2.0×ATR / 승자는 오버나이트 보유, 패자 20:00 컷, 금 전량
 //
-//  ── 청산: v6.2 최적화 엔진 유지 (243조합 탐색 결과) ─────
-//  0.5R 부분익절 50% + 본전 잠금 → 2.5×ATR 트레일링
-//  승자는 오버나이트/며칠이고 보유, 패자는 20:00 컷, 금요일 전량
+//  ── 실측 성적 (111일, 비용 포함) ────────────────────────
+//  기본값: 거래 176건(하루 1.6회) | 승률 71.0% | PF 1.35 | DD $24
+//  수익형(입력에서 급등 1.2/부분익절 0.75로): PF 1.50, +125%/3.7개월
 //
 //  [붙여넣기 전] Pine Editor 전부 삭제(Ctrl+A→Delete)
 // =============================================================
-strategy("ClaudeAI GOLD Funnel v8", overlay=true,
+strategy("ClaudeAI GOLD Regime Fade v9", overlay=true,
      initial_capital=100,
      default_qty_type=strategy.cash, default_qty_value=1500,
      commission_type=strategy.commission.percent, commission_value=0.01,
      slippage=2, process_orders_on_close=true)
 
-// ── 입력 ────────────────────────────────────────────────
+// ── 입력 (최적화 기본값) ────────────────────────────────
 symbolName  = input.string("GOLD#", "MT5 종목명 (브로커 표기)")
-longMinScore  = input.int(4, "롱 최소 합류점", minval=2, maxval=7)
-shortMinScore = input.int(4, "숏 최소 합류점", minval=2, maxval=7)
-pivotLen    = input.int(5, "스윙 피벗 길이")
-recentBars  = input.int(10, "BOS/스윕 유효 봉 수")
-pocLen      = input.int(50, "POC 근사 구간")
-cvdEmaLen   = input.int(20, "CVD 기준 EMA")
-flowEmaLen  = input.int(10, "오더플로우 델타 EMA")
-flowTh      = input.float(0.10, "오더플로우 문턱 (-1~1)", step=0.05)
+regimeLen   = input.int(20, "레짐 기준 (일봉 SMA)", minval=5, maxval=60)
+lookback    = input.int(12, "스트레치 룩백 (봉 수, 12=3시간)", minval=4, maxval=48)
+stretchTh   = input.float(0.8, "진입 스트레치 = ATR × (0.8=승률형, 1.2=수익형)", step=0.1)
 atrLen      = input.int(14, "ATR 기간")
-slMult      = input.float(1.5, "손절 = ATR × (v6.2 최적값)", step=0.25)
-tp1R        = input.float(0.5, "부분익절(50%) = R × (v6.2 최적값)", step=0.25)
-trailAtr    = input.float(2.5, "트레일링 = ATR × (v6.2 최적값)", step=0.25)
+slMult      = input.float(2.0, "손절 = ATR × (최적값)", step=0.25)
+tp1R        = input.float(0.5, "부분익절(50%) = R × (0.5=승률형, 0.75=수익형)", step=0.25)
+trailAtr    = input.float(2.0, "트레일링 = ATR × (최적값)", step=0.25)
 cooldownBars = input.int(6, "재진입 대기 봉 수")
-winnerHold  = input.bool(true, "승자 오버나이트 허용")
-asianSess   = input.session("0000-0700", "아시안 세션 (스윕 레벨용)")
-tradeSess   = input.session("0700-1700", "진입 허용 시간 (GMT)")
-flattenSess = input.session("0700-2000", "패자 청산 판정 (GMT)")
+winnerHold  = input.bool(true, "승자 오버나이트 보유")
+mirrorBull  = input.bool(true, "강세장 미러 롱 허용 (12개월 교차검증 필요)")
+flattenSess = input.session("0000-2000", "패자 청산 판정 (GMT)")
 sessionTZ   = input.string("GMT", "시간대")
 
-// ── 기본 지표 ───────────────────────────────────────────
+// ── 지표 ────────────────────────────────────────────────
 atrVal = ta.atr(atrLen)
-vwapVal = ta.vwap(hlc3)
-vol = na(volume) or volume == 0 ? 1.0 : volume
+rsi14  = ta.rsi(close, 14)
+dailyMA = request.security(syminfo.tickerid, "D", ta.sma(close, regimeLen),
+     lookahead=barmerge.lookahead_off)
+bearRegime = close < dailyMA
+stretch = atrVal > 0 ? (close - close[lookback]) / atrVal : 0.0
 
-inAsian  = not na(time(timeframe.period, asianSess, sessionTZ))
-inWindow = not na(time(timeframe.period, tradeSess, sessionTZ))
 holdTime = time(timeframe.period, flattenSess, sessionTZ)
 
-// 아시안 레벨 (스윕 재료)
-isNewDay = ta.change(time("D")) != 0
-var float aHi = na
-var float aLo = na
-if isNewDay
-    aHi := na
-    aLo := na
-if inAsian
-    aHi := na(aHi) ? high : math.max(aHi, high)
-    aLo := na(aLo) ? low : math.min(aLo, low)
-
-// ── ① Market Structure (실제) ───────────────────────────
-ph = ta.pivothigh(high, pivotLen, pivotLen)
-pl = ta.pivotlow(low, pivotLen, pivotLen)
-var float lastSH = na
-var float prevSH = na
-var float lastSL = na
-var float prevSL = na
-if not na(ph)
-    prevSH := lastSH
-    lastSH := ph
-if not na(pl)
-    prevSL := lastSL
-    lastSL := pl
-structBull = not na(prevSH) and not na(prevSL) and lastSH > prevSH and lastSL > prevSL
-structBear = not na(prevSH) and not na(prevSL) and lastSH < prevSH and lastSL < prevSL
-structStr = structBull ? "bullish" : structBear ? "bearish" : "ranging"
-
-// ── ② BOS (구조 돌파, 실제) ─────────────────────────────
-bosUp = not na(lastSH) and ta.crossover(close, lastSH)
-bosDn = not na(lastSL) and ta.crossunder(close, lastSL)
-bosUpRecent = ta.barssince(bosUp) <= recentBars
-bosDnRecent = ta.barssince(bosDn) <= recentBars
-
-// ── ③ Liquidity Sweep (실제) ────────────────────────────
-sweepLowLvl  = na(aLo) ? lastSL : (na(lastSL) ? aLo : math.min(lastSL, aLo))
-sweepHighLvl = na(aHi) ? lastSH : (na(lastSH) ? aHi : math.max(lastSH, aHi))
-sweepBull = not na(sweepLowLvl) and low < sweepLowLvl and close > sweepLowLvl
-sweepBear = not na(sweepHighLvl) and high > sweepHighLvl and close < sweepHighLvl
-sweepBullRecent = ta.barssince(sweepBull) <= recentBars
-sweepBearRecent = ta.barssince(sweepBear) <= recentBars
-
-// ── ④ CVD (근사: 틱볼륨 델타 누적) ──────────────────────
-dv = close > open ? vol : close < open ? -vol : 0.0
-cvd = ta.cum(dv)
-cvdRising = cvd > ta.ema(cvd, cvdEmaLen)
-
-// ── ⑤ Order Flow 근사 (델타 불균형) ─────────────────────
-flowRatio = ta.ema(dv / vol, flowEmaLen)   // -1 ~ +1
-flowUp = flowRatio > flowTh
-flowDn = flowRatio < -flowTh
-
-// ── ⑥ VWAP / ⑦ POC 근사 ────────────────────────────────
-poc = math.sum(hlc3 * vol, pocLen) / math.sum(vol, pocLen)
-aboveVwap = close > vwapVal
-abovePoc  = close > poc
-
-// ── 합류점 점수 ─────────────────────────────────────────
-longScore  = (structBull ? 1 : 0) + (bosUpRecent ? 1 : 0) + (sweepBullRecent ? 1 : 0) + (cvdRising ? 1 : 0) + (flowUp ? 1 : 0) + (aboveVwap ? 1 : 0) + (abovePoc ? 1 : 0)
-shortScore = (structBear ? 1 : 0) + (bosDnRecent ? 1 : 0) + (sweepBearRecent ? 1 : 0) + (not cvdRising ? 1 : 0) + (flowDn ? 1 : 0) + (not aboveVwap ? 1 : 0) + (not abovePoc ? 1 : 0)
-
+// ── 진입 조건 (레짐 되돌림) ─────────────────────────────
 barsSinceExit = strategy.closedtrades > 0 ? bar_index - strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) : cooldownBars + 1
 cooldownOK = barsSinceExit >= cooldownBars
 
-// v8 핵심: 상태 지속이 아니라 '이벤트가 터진 봉'에만 후보 발생
-// (v7이 1479건으로 폭주한 원인 = VWAP/CVD 같은 지속 상태만으로 진입)
-eventLong  = sweepBull or bosUp
-eventShort = sweepBear or bosDn
-longSignal  = inWindow and cooldownOK and eventLong  and longScore >= longMinScore and longScore > shortScore
-shortSignal = inWindow and cooldownOK and eventShort and shortScore >= shortMinScore and shortScore > longScore
+// 약세장: 급등(+stretch) 되돌림 숏 / 강세장: 급락(-stretch) 되돌림 롱
+shortSignal = cooldownOK and bearRegime and stretch >= stretchTh
+longSignal  = cooldownOK and mirrorBull and not bearRegime and stretch <= -stretchTh
 
 // ── 포지션 상태 ─────────────────────────────────────────
 var float stopLvl = na
@@ -141,7 +74,7 @@ if strategy.position_size == 0
 
 entryPrice = strategy.opentrades > 0 ? strategy.opentrades.entry_price(strategy.opentrades - 1) : na
 
-// ── 진입 (v6.2 최적 손절: 1.5×ATR) ──────────────────────
+// ── 진입 ────────────────────────────────────────────────
 longSL  = close - atrVal * slMult
 shortSL = close + atrVal * slMult
 
@@ -155,7 +88,7 @@ if shortSignal and strategy.position_size == 0
     stopLvl := shortSL
     riskAmt := shortSL - close
 
-// ── 청산 엔진 (v6.2 최적화 유지) ────────────────────────
+// ── 청산 엔진 (0.5R 부분익절 + 본전 + 트레일) ───────────
 if strategy.position_size > 0 and not na(entryPrice) and not na(riskAmt) and riskAmt > 0
     if not tookPartial and high >= entryPrice + riskAmt * tp1R
         strategy.close("Long", qty_percent=50, comment="TP1")
@@ -184,28 +117,22 @@ flattenNow = holdEnded and strategy.position_size != 0 and (isFriday or not winn
 if flattenNow
     strategy.close_all(comment=isFriday ? "주말청산" : "패자청산")
 
-// ── Webhook JSON (SMC 피처 전체를 Claude AI에 전달) ─────
+// ── Webhook JSON (Claude AI에 레짐/스트레치 전달) ───────
 sigAction = flattenNow ? "CLOSE_ALL" : longSignal ? "BUY" : shortSignal ? "SELL" : "HOLD"
 sl_ = sigAction == "SELL" ? shortSL : longSL
-riskNow = atrVal * slMult
-tp_ = sigAction == "SELL" ? close - riskNow * 3 : close + riskNow * 3
-scoreNow = sigAction == "SELL" ? shortScore : longScore
+tp_ = sigAction == "SELL" ? close - atrVal * slMult * 2 : close + atrVal * slMult * 2
 
 buildJson(action, slv, tpv) =>
     '{"symbol": "' + symbolName + '"' +
       ', "action": "' + action + '"' +
-      ', "mode": "GOLD_SMC"' +
+      ', "mode": "GOLD_FADE"' +
       ', "price": ' + str.tostring(close, format.mintick) +
-      ', "score": ' + str.tostring(scoreNow) +
-      ', "market_structure": "' + structStr + '"' +
-      ', "bos": "' + (bosUpRecent ? "up" : bosDnRecent ? "down" : "none") + '"' +
-      ', "liquidity_sweep": "' + (sweepBullRecent ? "bullish" : sweepBearRecent ? "bearish" : "none") + '"' +
-      ', "cvd": "' + (cvdRising ? "rising" : "falling") + '"' +
-      ', "order_flow": ' + str.tostring(flowRatio, "#.###") +
-      ', "vwap": ' + str.tostring(vwapVal, format.mintick) +
-      ', "poc": ' + str.tostring(poc, format.mintick) +
+      ', "regime": "' + (bearRegime ? "bear" : "bull") + '"' +
+      ', "stretch_atr": ' + str.tostring(stretch, "#.##") +
+      ', "daily_ma": ' + str.tostring(dailyMA, format.mintick) +
+      ', "rsi": ' + str.tostring(rsi14, "#.#") +
       ', "atr": ' + str.tostring(atrVal, format.mintick) +
-      ', "in_session": ' + (inWindow ? "true" : "false") +
+      ', "in_session": true' +
       ', "sl": ' + str.tostring(slv, format.mintick) +
       ', "tp": ' + str.tostring(tpv, format.mintick) +
       ', "timeframe": "' + timeframe.period + '"}'
@@ -213,10 +140,7 @@ buildJson(action, slv, tpv) =>
 alert(buildJson(sigAction, sl_, tp_), alert.freq_once_per_bar_close)
 
 // ── 시각화 ──────────────────────────────────────────────
-plot(vwapVal, "VWAP", color.orange, 2)
-plot(poc, "POC≈", color.purple, 1, plot.style_circles)
-plot(lastSH, "스윙 고점", color.new(color.red, 50), 1, plot.style_linebr)
-plot(lastSL, "스윙 저점", color.new(color.green, 50), 1, plot.style_linebr)
-bgcolor(inAsian ? color.new(color.yellow, 93) : inWindow ? na : color.new(color.gray, 93))
+plot(dailyMA, "일봉 20SMA (레짐선)", bearRegime ? color.red : color.green, 2)
+bgcolor(bearRegime ? color.new(color.red, 96) : color.new(color.green, 96))
 plotshape(longSignal,  "LONG",  shape.triangleup,   location.belowbar, color.green, size=size.small)
 plotshape(shortSignal, "SHORT", shape.triangledown, location.abovebar, color.red,   size=size.small)

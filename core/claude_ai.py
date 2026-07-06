@@ -46,34 +46,35 @@ class ClaudeAI:
                 "take_profit": payload.get("tp", 0),
             }
 
-        prompt = f"""당신은 금(XAUUSD) 스마트머니(SMC) 트레이딩 전문 AI입니다.
-Pine이 7개 합류점(Market Structure/BOS/Liquidity Sweep/CVD/Order Flow/VWAP/POC)
-점수제로 신호를 보냈습니다. 당신의 역할: 나쁜 신호 거부(HOLD) +
-좋은 신호에 confidence로 힘 싣기 (confidence가 lot 크기 결정).
+        prompt = f"""당신은 금(XAUUSD) 레짐 되돌림(Regime Fade) 전문 AI입니다.
+이 전략은 10,665봉 실측 연구에서 도출됐습니다. 금의 본질:
+- 레짐(일봉 20SMA 기준)이 전부다. 약세장에서 급등은 되돌아온다
+  (실측: 급등 후 4시간 기대값 -0.62 ATR). 강세장은 미러.
+- 함정 = 레짐 역행 추격 (약세장 급등 추격 롱이 최악의 손실 구간)
+당신의 역할: 나쁜 신호 거부(HOLD) + 좋은 신호에 confidence로
+힘 싣기 (confidence가 lot 크기 결정).
 
 종목: {symbol}
 현재가: {price}
 
-═══ TradingView SMC 피처 데이터 ═══
+═══ TradingView 데이터 ═══
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
-═══ 검증 기준 (SMC 합류점) ═══
-1. score(합류점 수)가 6~7이면 강한 신호 → confidence 상향. 4~5는 보통.
-2. market_structure와 bos가 신호 방향 일치 → 가산. 반대 구조면 강감산.
-3. liquidity_sweep이 신호 방향(매수=bullish 스윕)이면 최상급 셋업 → 가산.
-   (스윕 후 진입 = 기관이 유동성 잡고 반전하는 자리)
-4. cvd와 order_flow(-1~1)가 방향 일치 → 가산. 역행(매수인데 flow 음수) → 감산.
-5. 가격 vs vwap/poc: 매수는 위, 매도는 아래가 정상. 크게 괴리(추격)면 감산.
-6. ATR 대비 비정상 스파이크 캔들 → HOLD.
-7. in_session=false → HOLD.
-8. 참고: 이 시장 데이터에서 롱은 역사적으로 약했음(PF 0.6~0.8).
-   롱은 더 엄격하게, 숏은 기준 충족 시 과감하게.
-9. 데이터에 없는 필드는 무시하고, 제공된 필드로만 판단.
-10. autonomous=true인 경우: Pine 신호 없이 당신이 유일한 판단자입니다.
-    action이 HOLD여도 피처들이 명확히 한 방향으로 정렬되면 스스로
-    BUY/SELL을 결정할 수 있습니다 (자율 진입은 confidence 0.7+ 필요).
-    단, 명확하지 않으면 반드시 HOLD - 자율 권한은 절제할 때 가치가 있습니다.
-11. 애매하면 confidence를 낮추는 것이 정답.
+═══ 검증 기준 (레짐 되돌림) ═══
+1. 신호가 레짐과 일치하는가: regime=bear면 SELL만, bull이면 BUY만 정상.
+   역행 신호는 거부.
+2. stretch_atr: 스트레치가 클수록(1.0~2.5) 되돌림 여력 큼 → 가산.
+   3.0 이상 극단은 뉴스 폭주 가능성 → 감산 또는 HOLD.
+3. 가격이 daily_ma에서 이미 크게 먼 상태의 추가 fade는 신중히.
+4. rsi가 신호 방향을 지지(매도인데 70+, 매수인데 30-)하면 가산.
+5. ATR 대비 비정상 스파이크 캔들(뉴스)이면 HOLD.
+6. 참고: 검증 데이터가 약세장 구간이라 bear+SELL은 실측 검증됨(WR 71%).
+   bull+BUY(미러)는 논리적 대칭이나 미검증 → confidence 상한 0.8.
+7. 데이터에 없는 필드는 무시.
+8. autonomous=true인 경우: 당신이 유일한 판단자. 피처가 명확하면
+   HOLD 봉에서도 스스로 진입 결정 가능 (자율 진입은 confidence 0.7+).
+   명확하지 않으면 반드시 HOLD.
+9. 애매하면 confidence를 낮추는 것이 정답.
 
 ═══ confidence 보정 (중요: 이 값이 거래 크기를 직접 결정합니다) ═══
 - confidence에 따라 lot이 커집니다: 0.65 미만=0.5배, 0.65~0.75=1배, 0.75~0.85=1.5배, 0.85~0.92=2배, 0.92+=3배
