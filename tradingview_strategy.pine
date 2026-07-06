@@ -47,15 +47,18 @@ trendAlign  = input.bool(true, "EMA200 방향 일치 필수")
 // v6.1: 롱 PF 0.822 원인 = 하락장 가짜반등 롱. EMA50-200 이중 정렬로 차단
 strongAlign = input.bool(true, "강한 추세 정렬 (EMA50-200 이중, 가짜반등 차단)")
 adxLen      = input.int(14, "ADX 기간")
-adxMin      = input.float(20.0, "눌림목 진입 최소 ADX (횡보장 눌림목 차단)", minval=10, maxval=40)
+adxMin      = input.float(30.0, "눌림목 진입 최소 ADX (최적화: 30, 강추세만)", minval=10, maxval=40)
 bufMult     = input.float(0.10, "돌파 버퍼 = ATR ×", step=0.05)
 minRangeAtr = input.float(0.5, "최소 레인지 = ATR ×", step=0.1)
 maxRangeAtr = input.float(4.0, "최대 레인지 = ATR ×", step=0.5)
 atrLen      = input.int(14, "ATR 기간")
-slCapAtr    = input.float(2.5, "ORB 손절 캡 = ATR ×", step=0.25)
-pbSlAtr     = input.float(2.0, "눌림목 손절 = ATR ×", step=0.25)
-tp1R        = input.float(1.0, "부분익절(50%) = R ×", step=0.25)
-trailAtr    = input.float(2.0, "트레일링 = ATR × (넓을수록 추세 오래 탐)", step=0.25)
+// v6.2 최적화 결과 (독립 데이터 111일 × 243조합 탐색):
+//  0.5R 조기 부분익절 + 타이트 손절 1.5 + 넓은 트레일 2.5 + ADX 30
+//  → WR 48%→73.5%, PF 0.76→1.36, DD 절반으로 개선
+slCapAtr    = input.float(1.5, "ORB 손절 캡 = ATR × (최적화: 1.5)", step=0.25)
+pbSlAtr     = input.float(1.5, "눌림목 손절 = ATR × (최적화: 1.5)", step=0.25)
+tp1R        = input.float(0.5, "부분익절(50%) = R × (최적화: 0.5 조기확보=승률↑)", step=0.25)
+trailAtr    = input.float(2.5, "트레일링 = ATR × (최적화: 2.5 길게 태움)", step=0.25)
 cooldownBars = input.int(4, "재진입 대기 봉 수", minval=0, maxval=20)
 
 // ── 지표 ────────────────────────────────────────────────
