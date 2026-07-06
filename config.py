@@ -22,11 +22,19 @@ class Config:
     PRIORITY_SYMBOLS = ["GOLD#"]
 
     # ── Claude AI 호출 정책 ─────────────────────────────────────
-    # True  = Pine이 BUY/SELL 신호를 보낼 때만 AI가 최종 검증 + 신뢰도 산정
-    #         AI의 역할: ① 나쁜 신호 거부(HOLD) ② confidence로 lot 크기 결정
-    #         (하루 ~2회 신호 × 진입 시에만 호출 → 크레딧 부담 낮음)
-    # False = AI 생략, Pine 신호 즉시 실행 (크레딧 0)
+    # AI_CONFIRM_ENTRIES:
+    #   True  = Pine BUY/SELL 신호를 AI가 최종 검증 + confidence로 lot 결정
+    #   False = AI 생략, Pine 신호 즉시 실행 (크레딧 0)
     AI_CONFIRM_ENTRIES = True
+
+    # AI_AUTONOMOUS (절대 권한 모드):
+    #   True  = Pine 신호와 무관하게, 세션 중 매 봉의 지표 데이터를 AI가 보고
+    #           스스로 진입 결정 (Pine은 데이터 공급자로 격하)
+    #   비용: 15분봉 세션 기준 약 40회/일 ≈ 월 $10~15 크레딧
+    #   ⚠ 경고: AI 자율 판단은 백테스트가 '정의상 불가능' →
+    #           엣지를 사전 검증할 방법이 없음. 데모에서 규칙 기반과
+    #           A/B 비교 후 사용 여부를 결정할 것.
+    AI_AUTONOMOUS = False
 
     # ── 데이트레이딩 설정 (당일 청산 / 세션 거래) ──────────────
     # 거래 세션 (UTC 기준). 런던+뉴욕 = 07:00~20:00

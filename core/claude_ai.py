@@ -68,7 +68,12 @@ Pine이 7개 합류점(Market Structure/BOS/Liquidity Sweep/CVD/Order Flow/VWAP/
 7. in_session=false → HOLD.
 8. 참고: 이 시장 데이터에서 롱은 역사적으로 약했음(PF 0.6~0.8).
    롱은 더 엄격하게, 숏은 기준 충족 시 과감하게.
-9. 애매하면 confidence를 낮추는 것이 정답.
+9. 데이터에 없는 필드는 무시하고, 제공된 필드로만 판단.
+10. autonomous=true인 경우: Pine 신호 없이 당신이 유일한 판단자입니다.
+    action이 HOLD여도 피처들이 명확히 한 방향으로 정렬되면 스스로
+    BUY/SELL을 결정할 수 있습니다 (자율 진입은 confidence 0.7+ 필요).
+    단, 명확하지 않으면 반드시 HOLD - 자율 권한은 절제할 때 가치가 있습니다.
+11. 애매하면 confidence를 낮추는 것이 정답.
 
 ═══ confidence 보정 (중요: 이 값이 거래 크기를 직접 결정합니다) ═══
 - confidence에 따라 lot이 커집니다: 0.65 미만=0.5배, 0.65~0.75=1배, 0.75~0.85=1.5배, 0.85~0.92=2배, 0.92+=3배

@@ -120,8 +120,11 @@ class TradingEngine:
     # ── 진입 ────────────────────────────────────────────────
 
     def _check_entry(self, symbol: str, price: float, payload: dict, action: str) -> dict:
-        # HOLD 봉은 즉시 반환 (AI 미호출 → 크레딧 절약)
-        if action not in ("BUY", "SELL"):
+        autonomous = getattr(Config, "AI_AUTONOMOUS", False)
+
+        # 일반 모드: HOLD 봉은 즉시 반환 (AI 미호출 → 크레딧 절약)
+        # 자율 모드: HOLD 봉도 AI에게 넘겨 스스로 진입 판단 (절대 권한)
+        if action not in ("BUY", "SELL") and not autonomous:
             return {"message": "신호 없음(HOLD)"}
 
         if not self._in_trading_session():
@@ -143,8 +146,16 @@ class TradingEngine:
             self.log(f"[거래 차단] {gate['reason']}", "WARNING")
             return {"message": f"거래 차단: {gate['reason']}"}
 
-        # Claude AI 검증 (신뢰도가 lot 크기를 결정)
-        if getattr(Config, "AI_CONFIRM_ENTRIES", True):
+        # Claude AI 검증/자율 판단 (신뢰도가 lot 크기를 결정)
+        if autonomous:
+            payload = dict(payload)
+            payload["autonomous"] = True
+            if action in ("BUY", "SELL"):
+                self.log(f"[TV 신호] {action} {symbol} @ {price} - AI 자율 판단 중...")
+            decision = self.ai.analyze_tradingview(payload)
+            if str(decision.get("action", "HOLD")).upper() in ("BUY", "SELL"):
+                self.log(f"[AI 자율판단] {decision['action']} | 신뢰도 {decision.get('confidence', 0):.0%} | {decision.get('reasoning', '')}")
+        elif getattr(Config, "AI_CONFIRM_ENTRIES", True):
             self.log(f"[TV 신호] {action} {symbol} @ {price} - Claude AI 검증 중...")
             decision = self.ai.analyze_tradingview(payload)
             self.log(f"[AI 판단] {decision['action']} | 신뢰도 {decision.get('confidence', 0):.0%} | {decision.get('reasoning', '')}")
@@ -156,8 +167,12 @@ class TradingEngine:
 
         final = str(decision.get("action", "HOLD")).upper()
         confidence = float(decision.get("confidence", 0))
-        if final not in ("BUY", "SELL") or confidence < 0.6:
-            return {"message": f"AI 진입 보류: {decision.get('reasoning', '')}"}
+        # 자율 진입(Pine 신호 없이 AI 단독)은 더 엄격한 신뢰도 요구
+        min_conf = 0.7 if (autonomous and action not in ("BUY", "SELL")) else 0.6
+        if final not in ("BUY", "SELL") or confidence < min_conf:
+            if final in ("BUY", "SELL") or action in ("BUY", "SELL"):
+                return {"message": f"AI 진입 보류: {decision.get('reasoning', '')}"}
+            return {"message": "AI 자율 판단: 관망"}
 
         balance = self.mt5.get_account_info().get("balance", 10000)
         sl = float(decision.get("stop_loss") or (price * 0.995 if final == "BUY" else price * 1.005))
