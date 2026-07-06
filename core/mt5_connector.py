@@ -293,24 +293,50 @@ class MT5Connector:
 
         pos = position[0]
         order_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
-        price = mt5.symbol_info_tick(pos.symbol).bid if pos.type == 0 else mt5.symbol_info_tick(pos.symbol).ask
 
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": pos.symbol,
-            "volume": pos.volume,
-            "type": order_type,
-            "position": ticket,
-            "price": price,
-            "deviation": 20,
-            "magic": 234000,
-            "comment": "AI 청산",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
-        result = mt5.order_send(request)
+        tick = mt5.symbol_info_tick(pos.symbol)
+        if tick is None:
+            return {"success": False, "message": f"청산 실패: {pos.symbol} 시세 조회 불가"}
+        price = tick.bid if pos.type == 0 else tick.ask
+
+        # 진입과 동일하게 종목 지원 filling mode 자동 감지 (IOC 고정이던 버그 수정)
+        info = mt5.symbol_info(pos.symbol)
+        filling_modes = []
+        if info is not None:
+            fm = info.filling_mode
+            if fm & 2:
+                filling_modes.append(mt5.ORDER_FILLING_IOC)
+            if fm & 1:
+                filling_modes.append(mt5.ORDER_FILLING_FOK)
+        for mode in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
+            if mode not in filling_modes:
+                filling_modes.append(mode)
+
+        result = None
+        for filling in filling_modes:
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": pos.symbol,
+                "volume": pos.volume,
+                "type": order_type,
+                "position": ticket,
+                "price": price,
+                "deviation": 20,
+                "magic": 234000,
+                "comment": "ClaudeAI-Close",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": filling,
+            }
+            result = mt5.order_send(request)
+            if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+                break
+            if result is not None and result.retcode != 10030:
+                break
+
+        if result is None:
+            return {"success": False, "message": f"청산 실패: MT5 응답 없음 ({mt5.last_error()})"}
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return {"success": False, "message": f"청산 실패: {result.comment}"}
+            return {"success": False, "message": f"청산 실패 (코드:{result.retcode}): {result.comment}"}
 
         return {"success": True, "ticket": ticket, "profit": pos.profit}
 

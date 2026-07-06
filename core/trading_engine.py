@@ -391,6 +391,42 @@ class TradingEngine:
                 break
         self.risk.record_trade_result(profit)
         self._save_history()
+        self._equity_guard_check()
+
+    def _equity_guard_check(self):
+        """엣지 사망 감지: 최근 성적이 무너지면 자동매매를 스스로 중단.
+        국면 의존 전략을 안전하게 운용하는 핵심 장치 -
+        '전략이 언제 작동을 멈췄는가'를 사람보다 먼저 알아챈다."""
+        closed = [t["profit"] for t in self.trade_history if t.get("status") == "CLOSED"]
+        window = getattr(Config, "EQUITY_GUARD_WINDOW", 20)
+        max_cl = getattr(Config, "EQUITY_GUARD_MAX_CONSEC_LOSS", 6)
+        min_pf = getattr(Config, "EQUITY_GUARD_MIN_PF", 0.8)
+        if not closed:
+            return
+
+        # ① 연속 손실 검사
+        consec = 0
+        for p in reversed(closed):
+            if p < 0:
+                consec += 1
+            else:
+                break
+        if consec >= max_cl:
+            self.log(f"[Equity Guard] 연속 {consec}회 손실 감지 → 자동매매 자동 중단. "
+                     f"국면이 바뀌었을 수 있습니다. 상황 확인 후 수동으로 재시작하세요.", "ERROR")
+            self.active = False
+            return
+
+        # ② 롤링 PF 검사
+        recent = closed[-window:]
+        if len(recent) >= window:
+            wins = sum(p for p in recent if p > 0)
+            losses = -sum(p for p in recent if p < 0)
+            pf = wins / losses if losses > 0 else 99.0
+            if pf < min_pf:
+                self.log(f"[Equity Guard] 최근 {window}거래 PF {pf:.2f} < {min_pf} → 자동매매 자동 중단. "
+                         f"엣지가 약해졌습니다. 상황 확인 후 수동으로 재시작하세요.", "ERROR")
+                self.active = False
 
     def get_status(self) -> Dict[str, Any]:
         account = self.mt5.get_account_info() if self.mt5.connected else {}

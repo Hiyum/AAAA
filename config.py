@@ -48,6 +48,14 @@ class Config:
     # 시간 손절 안전망: '손실 중인' 포지션만 대상 (승자는 예외 - 계속 태움)
     MAX_POSITION_MINUTES = 600
 
+    # ── Equity Guard: 엣지 사망 감지기 ──────────────────────────
+    # 국면 의존 전략의 프로 운용법: 전략이 언제 죽는지 시스템이 감지.
+    # 최근 성적이 기준 아래로 떨어지면 자동매매를 자동 중단하고 알림.
+    # (재개는 대시보드에서 수동으로 - 사람이 국면을 확인한 뒤)
+    EQUITY_GUARD_WINDOW = 20          # 최근 N개 청산 거래로 평가
+    EQUITY_GUARD_MIN_PF = 0.8         # 롤링 PF가 이 밑이면 중단
+    EQUITY_GUARD_MAX_CONSEC_LOSS = 6  # 연속 손실 N회면 중단
+
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
     LOG_FILE = "logs/trades.json"
     CLAUDE_MODEL = "claude-sonnet-4-6"
