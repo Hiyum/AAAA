@@ -66,6 +66,9 @@ class ClaudeAI:
 5. ATR 대비 비정상 단일 캔들(뉴스 스파이크)이면 HOLD.
 6. in_session=false면 HOLD.
 7. 데이터에 없는 필드는 무시하고 있는 필드로만 판단.
+   (mode=DAYTRADE인 AUDUSD 신호는 RSI(2) 평균회귀 데이트레이딩:
+    rsi2 극단 진입 + 첫 수익 마감 청산. 같은 원칙으로 검증하되
+    실측 근거: 롱 위주 승률 77% - 롱은 정상, 숏은 신중히.)
 8. autonomous=true인 경우: 당신이 유일한 판단자. 피처가 명확하면
    HOLD 봉에서도 스스로 진입 결정 가능 (자율 진입은 confidence 0.7+).
    명확하지 않으면 반드시 HOLD.

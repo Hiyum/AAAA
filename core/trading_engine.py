@@ -32,8 +32,8 @@ class TradingEngine:
         self.active = False
         self.current_symbol = None
         self.trade_history = []
-        # GOLD 단일 집중: 동시 1포지션
-        self.max_open_positions = 1
+        # 포트폴리오: 종목당 1개(라우팅 보장), 전체 최대 2 (GOLD#+AUDUSD)
+        self.max_open_positions = 2
         self.latest_tv_data: Dict[str, Any] = {}
         self.session_thread: Optional[threading.Thread] = None
 
