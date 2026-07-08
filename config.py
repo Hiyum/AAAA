@@ -29,24 +29,25 @@ class Config:
     #   False = AI 생략, Pine 신호 즉시 실행 (크레딧 0)
     AI_CONFIRM_ENTRIES = True
 
-    # AI_AUTONOMOUS (절대 권한 모드):
-    #   True  = Pine 신호와 무관하게, 세션 중 매 봉의 지표 데이터를 AI가 보고
-    #           스스로 진입 결정 (Pine은 데이터 공급자로 격하)
-    #   비용: 15분봉 세션 기준 약 40회/일 ≈ 월 $10~15 크레딧
-    #   ⚠ 경고: AI 자율 판단은 백테스트가 '정의상 불가능' →
-    #           엣지를 사전 검증할 방법이 없음. 데모에서 규칙 기반과
-    #           A/B 비교 후 사용 여부를 결정할 것.
-    AI_AUTONOMOUS = False
+    # AI_AUTONOMOUS (AI 헤드 트레이더 모드) - 활성:
+    #   Pine은 매 봉 시장 데이터 보고만, 진입 판단은 Claude AI가 전담.
+    #   비용: 15분봉 세션 기준 약 50회/일 ≈ 월 $10~15 크레딧
+    #   ⚠ AI 재량 판단은 백테스트가 정의상 불가능 → 데모 실측이 유일한 검증.
+    AI_AUTONOMOUS = True
+
+    # AI 헤드 트레이더: 일일 거래 예산 (하루 4~5발)
+    # 프로는 기회를 고른다 - 남은 총알 수가 AI에게 전달되어
+    # "아껴 쏘는" 저격수 판단을 유도. 소진 시 그날 신규 진입 차단.
+    MAX_TRADES_PER_DAY = 5
 
     # ── 데이트레이딩 설정 (당일 청산 / 세션 거래) ──────────────
     # 거래 세션 (UTC 기준). 런던+뉴욕 = 07:00~20:00
     TRADE_SESSION_START_HOUR = 7    # UTC
     TRADE_SESSION_END_HOUR = 20     # UTC
-    # 승자 오버나이트 정책 (Trend Rider v6):
-    #  - 서버 정시 청산 없음 (Pine이 20:00 GMT에 '패자만' CLOSE_ALL 전송)
-    #  - 승자(본전 잠금)는 며칠이고 트레일링으로 계속 보유
-    DAILY_FLATTEN_HOUR = 20         # UTC (Pine 판정 시각과 동일)
-    ENFORCE_DAY_CLOSE = False
+    # 데이트레이딩 규율: 세션(07-20 UTC)만 진입 + 20시 전 포지션 정리
+    # (AI 자율 호출도 세션에만 발생 → 비용 통제)
+    DAILY_FLATTEN_HOUR = 20         # UTC
+    ENFORCE_DAY_CLOSE = True
     # 시간 손절 안전망: '손실 중인' 포지션만 대상 (승자는 예외 - 계속 태움)
     MAX_POSITION_MINUTES = 600
 

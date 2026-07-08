@@ -41,6 +41,8 @@ class TradingEngine:
         self._entry_lock = threading.Lock()      # 알람 동시 도착 시 이중 주문 방지
         self._last_entry_key = ""                # 중복 알람 무시용
         self._last_entry_time = 0.0
+        self._trades_today = 0                   # 일일 거래 예산 카운터
+        self._trades_day = None
 
         self._load_history()
 
@@ -139,6 +141,15 @@ class TradingEngine:
         if len(self.mt5.get_open_positions()) >= self.max_open_positions:
             return {"message": f"최대 포지션({self.max_open_positions}) 도달 - 진입 보류"}
 
+        # 일일 거래 예산 (하루 4~5발 - 프로는 기회를 고른다)
+        today = datetime.now(timezone.utc).date()
+        if self._trades_day != today:
+            self._trades_day = today
+            self._trades_today = 0
+        max_day = getattr(Config, "MAX_TRADES_PER_DAY", 5)
+        if self._trades_today >= max_day:
+            return {"message": f"일일 거래 예산({max_day}발) 소진 - 내일 재개"}
+
         # 일일 손실 한도 확인 (한도 초과 시 그날 거래 중단)
         balance_now = self.mt5.get_account_info().get("balance", 0)
         gate = self.risk.can_trade(balance_now)
@@ -147,8 +158,9 @@ class TradingEngine:
             return {"message": f"거래 차단: {gate['reason']}"}
 
         # Claude AI 검증/자율 판단 (신뢰도가 lot 크기를 결정)
+        payload = dict(payload)
+        payload["trades_left_today"] = max_day - self._trades_today
         if autonomous:
-            payload = dict(payload)
             payload["autonomous"] = True
             if action in ("BUY", "SELL"):
                 self.log(f"[TV 신호] {action} {symbol} @ {price} - AI 자율 판단 중...")
@@ -196,6 +208,7 @@ class TradingEngine:
             result = self.mt5.place_order(symbol, final, lot, price, sl, tp, comment="ClaudeAI-TV")
 
         if result["success"]:
+            self._trades_today += 1
             self._last_entry_key = f"{symbol}|{final}"
             self._last_entry_time = time.time()
             self.trade_history.append({
