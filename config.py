@@ -17,11 +17,9 @@ class Config:
     DEFAULT_DAILY_LOSS_LIMIT = 0.05  # 5% daily loss limit (manual mode)
 
     # Supported symbols (MT5 registered)
-    # 포트폴리오: 검증된 두 구성 동시 가동 (합산 ~4.4회/일)
-    #  - AUDUSD: DayTrade v4.1 (실측 4.1회/일, WR 77%, PF 1.248)
-    #  - GOLD# : ORB v5 셋업A (실측 0.3회/일, WR 70%, PF 1.909)
-    # ※ 브로커 표기 확인 필수 (Market Watch에서)
-    PRIORITY_SYMBOLS = ["GOLD#", "AUDUSD"]
+    # GOLD 단독 - AI 헤드 트레이더가 금만 거래
+    # ※ 브로커 표기 확인 필수 (Market Watch에서 GOLD# 인지 GOLD 인지)
+    PRIORITY_SYMBOLS = ["GOLD#"]
 
     # ── Claude AI 호출 정책 ─────────────────────────────────────
     # AI_CONFIRM_ENTRIES:

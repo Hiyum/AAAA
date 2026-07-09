@@ -73,9 +73,8 @@ class ClaudeAI:
    - 레인지/레벨 돌파가 추세(market_structure) 방향과 일치
    - 또는 추세 방향으로의 되돌림 완료 지점
    - 손절 거리(sl 참고) 대비 기대 이익이 1.5배 이상 그려질 때
-3. mode=GOLD_ORB 보고: 아시안 레인지(asian_high/low) 돌파 맥락.
-   range_atr_ratio 1~3 정상 / 4+ 과열. mode=DAYTRADE(AUDUSD):
-   rsi2 극단 평균회귀 - 실측상 롱이 강함(WR 77%), 숏은 신중히.
+3. 보고 맥락: 아시안 레인지(asian_high/low) 돌파.
+   range_atr_ratio 1~3 정상 / 4+ 과열(진입 자제).
 4. 회피 (함정 목록): 뉴스 스파이크성 비정상 캔들 / rsi 극단 추격
    (매수 80+, 매도 20-) / 방향 근거가 지표 1개뿐인 진입 / 세션 밖.
 5. Pine의 action이 BUY/SELL이면 참고 의견일 뿐, 최종 결정은 당신 것.
