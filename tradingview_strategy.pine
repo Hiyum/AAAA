@@ -51,12 +51,27 @@ trailAtr    = input.float(2.0, "트레일링 = ATR ×", minval=1.0, maxval=4.0, 
 // ── 지표 ────────────────────────────────────────────────
 atrVal   = ta.atr(atrLen)
 emaTrend = ta.ema(close, 200)
+ema20    = ta.ema(close, 20)
+ema50    = ta.ema(close, 50)
 rsi14    = ta.rsi(close, 14)
+vwapVal  = ta.vwap(hlc3)
+[diP, diM, adxVal] = ta.dmi(14, 14)
 
 inAsian   = not na(time(timeframe.period, asianSess, sessionTZ))
 inWindow  = not na(time(timeframe.period, tradeSess, sessionTZ))
 holdTime  = time(timeframe.period, flattenSess, sessionTZ)
 inHold    = not na(holdTime)
+
+// ── AI 헤드 트레이더용 종합 시장 보고 재료 ──────────────
+// 전일 고가/저가, 최근 스윙, 세션 내 유의미한 레벨들
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_off)
+pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_off)
+swingHi = ta.highest(high, 20)
+swingLo = ta.lowest(low, 20)
+distEma20 = atrVal > 0 ? (close - ema20) / atrVal : 0.0     // 기준선 이탈(ATR)
+distVwap  = atrVal > 0 ? (close - vwapVal) / atrVal : 0.0
+mom4 = atrVal > 0 ? (close - close[4]) / atrVal : 0.0       // 최근 1시간 모멘텀
+trendState = ema20 > ema50 and ema50 > emaTrend ? "strong_up" : ema20 < ema50 and ema50 < emaTrend ? "strong_down" : close > emaTrend ? "up" : "down"
 
 // ── 아시안 레인지 집계 (매일 리셋) ──────────────────────
 isNewDay = ta.change(time("D")) != 0
@@ -149,17 +164,31 @@ riskNow = sigAction == "SELL" ? (shortSL - close) : (close - longSL)
 tp_ = sigAction == "SELL" ? close - riskNow * 2 : close + riskNow * 2
 trendStr = close > emaTrend ? "bullish" : "bearish"
 
+// AI 헤드 트레이더에게 매 봉 종합 시장 스냅샷 전달 (판단 재료 풍부화)
 buildJson(action, slv, tpv) =>
     '{"symbol": "' + symbolName + '"' +
       ', "action": "' + action + '"' +
-      ', "mode": "GOLD_ORB"' +
+      ', "mode": "GOLD_AI"' +
       ', "price": ' + str.tostring(close, format.mintick) +
+      ', "trend": "' + trendState + '"' +
       ', "market_structure": "' + trendStr + '"' +
+      ', "adx": ' + str.tostring(adxVal, "#.#") +
+      ', "rsi": ' + str.tostring(rsi14, "#.#") +
+      ', "atr": ' + str.tostring(atrVal, format.mintick) +
+      ', "dist_ema20_atr": ' + str.tostring(distEma20, "#.##") +
+      ', "dist_vwap_atr": ' + str.tostring(distVwap, "#.##") +
+      ', "momentum_1h_atr": ' + str.tostring(mom4, "#.##") +
+      ', "vwap": ' + str.tostring(vwapVal, format.mintick) +
+      ', "ema20": ' + str.tostring(ema20, format.mintick) +
+      ', "ema200": ' + str.tostring(emaTrend, format.mintick) +
       ', "asian_high": ' + str.tostring(na(aHi) ? close : aHi, format.mintick) +
       ', "asian_low": ' + str.tostring(na(aLo) ? close : aLo, format.mintick) +
       ', "range_atr_ratio": ' + str.tostring(na(rangeW) ? 0 : rangeW / atrVal, "#.##") +
-      ', "rsi": ' + str.tostring(rsi14, "#.#") +
-      ', "atr": ' + str.tostring(atrVal, format.mintick) +
+      ', "prev_day_high": ' + str.tostring(pdh, format.mintick) +
+      ', "prev_day_low": ' + str.tostring(pdl, format.mintick) +
+      ', "swing_high_20": ' + str.tostring(swingHi, format.mintick) +
+      ', "swing_low_20": ' + str.tostring(swingLo, format.mintick) +
+      ', "orb_signal": "' + (longSignal ? "buy" : shortSignal ? "sell" : "none") + '"' +
       ', "in_session": ' + (inWindow ? "true" : "false") +
       ', "sl": ' + str.tostring(slv, format.mintick) +
       ', "tp": ' + str.tostring(tpv, format.mintick) +
