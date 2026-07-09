@@ -117,17 +117,32 @@ if strategy.position_size == 0
 
 entryPrice = strategy.opentrades > 0 ? strategy.opentrades.entry_price(strategy.opentrades - 1) : na
 
-// ── 진입 ────────────────────────────────────────────────
-if longSignal and strategy.position_size == 0
-    strategy.entry("Long", strategy.long)
-    stopLvl := longSL
-    riskAmt := close - longSL
-    tookLong := true
+// ── 진입 (스탑 주문: 레벨 터치 즉시 체결 = 빠른 진입) ───
+// 돌파 봉 마감을 기다리지 않고, 아시안 고/저에 스탑을 걸어
+// 가격이 닿는 순간 봉 중간에 바로 진입 → 소익 손실 최소화
+canLong  = inWindow and not inAsian and rangeOK and not tookLong  and alignL and strategy.position_size == 0
+canShort = inWindow and not inAsian and rangeOK and not tookShort and alignS and strategy.position_size == 0
 
-if shortSignal and strategy.position_size == 0
-    strategy.entry("Short", strategy.short)
+if canLong
+    strategy.entry("Long", strategy.long, stop=aHi + buf)
+else
+    strategy.cancel("Long")
+
+if canShort
+    strategy.entry("Short", strategy.short, stop=aLo - buf)
+else
+    strategy.cancel("Short")
+
+// 체결 직후 리스크/손절 기록 (신규 진입 감지)
+justLong  = strategy.position_size > 0 and strategy.position_size[1] <= 0
+justShort = strategy.position_size < 0 and strategy.position_size[1] >= 0
+if justLong
+    stopLvl := longSL
+    riskAmt := strategy.position_avg_price - longSL
+    tookLong := true
+if justShort
     stopLvl := shortSL
-    riskAmt := shortSL - close
+    riskAmt := shortSL - strategy.position_avg_price
     tookShort := true
 
 // ── 청산 스택 (돌파형: 부분익절 + 본전 + 트레일링) ──────
