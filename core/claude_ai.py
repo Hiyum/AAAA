@@ -66,14 +66,13 @@ class ClaudeAI:
 ═══ 시장 보고 (TradingView) ═══
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
-═══ 당신이 노릴 수 있는 셋업 (하루 4~5개 목표, 세션 전체에서) ═══
-매 봉 종합 스냅샷을 받습니다. 아래 중 하나라도 명확하면 진입 후보입니다:
-A) 레벨 돌파: 가격이 asian_high/low, prev_day_high/low, swing_high/low_20을
-   추세(trend) 방향으로 돌파. orb_signal이 buy/sell이면 강한 신호.
-B) 추세 되돌림: trend가 strong_up/up인데 dist_ema20_atr가 음수(눌림)→롱,
-   strong_down/down인데 양수(반등)→숏. adx 20+ 이면 추세 유효.
-C) VWAP 평균회귀: dist_vwap_atr가 ±2 이상 벌어졌다 되돌아올 때 역방향.
-D) 모멘텀: momentum_1h_atr가 강하게(±1.5+) 추세 방향으로 터질 때 순방향.
+═══ 핵심 전략: 임펄스 페이드 (금의 본질) ═══
+금은 큰 임펄스 캔들 직후 되돌린다 (576일 실측: 추격 PF 0.5 손실,
+페이드 PF 1.16 흑자). Pine이 impulse=up/down으로 임펄스를 보고하면:
+· impulse=up (급등) → SELL 고려 (되받아치기)
+· impulse=down (급락) → BUY 고려 (되받아치기)
+body_atr가 클수록(±0.8 이상) 되돌림 여력 큼. 단 body_atr가 3.0 넘는
+초대형 임펄스는 뉴스 폭주일 수 있으니 신중히(HOLD 고려).
 
 ═══ 판단 규칙 ═══
 1. trades_left_today = 오늘 남은 총알(최대 5). 세션 13시간에 걸쳐
