@@ -116,11 +116,12 @@ class RiskManager:
             return {"allowed": True, "reason": ""}
 
         loss_pct = (self.initial_balance - account_balance) / self.initial_balance
-        limit = self.daily_loss_limit if self.mode == "manual" else 0.05
+        # auto 모드도 5% 고정 대신 설정값 사용 (소액 계좌: 한 번 손실에 하루가 끝나지 않게)
+        limit = self.daily_loss_limit
 
         if self.mode == "auto":
-            if account_balance < 50:
-                return {"allowed": False, "reason": "잔고 부족 (최소 $50)"}
+            if account_balance < 20:
+                return {"allowed": False, "reason": "잔고 부족 (최소 $20)"}
 
         if loss_pct >= limit:
             return {

@@ -329,9 +329,9 @@ class TradingEngine:
             # 소액 데모 전용: 래더를 최소랏 1건으로 축소해 강행 (위험 알고 켠 것)
             rungs = [{"price": rungs[0]["price"], "lot": specs["volume_min"]}]
             total_risk = abs(rungs[0]["price"] - sl) * specs["contract_size"] * specs["volume_min"]
-            self.log(f"[리스크 초과 강행] 최소랏 {specs['volume_min']} 1건으로 축소 진행 "
-                     f"(ALLOW_MIN_LOT_OVERRIDE=True) | 리스크 ${total_risk:.2f} = 잔고의 "
-                     f"{total_risk/balance*100:.1f}% - 소액 데모 전용 모드입니다", "WARNING")
+            self.log(f"[최소랏 집행] 구조 SL 유지, 최소랏 {specs['volume_min']} 1건 | "
+                     f"이 거래 리스크 ${total_risk:.2f} = 잔고의 "
+                     f"{total_risk/balance*100:.1f}% (리스크 제한 해제 상태)", "WARNING")
         elif over_cap and getattr(Config, "REJECT_IF_MIN_LOT_EXCEEDS_CAP", True):
             msg = (f"진입 거부: 래더 총 리스크 ${total_risk:.2f} = 잔고의 "
                    f"{total_risk/balance*100:.1f}% > 하드캡 "

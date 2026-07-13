@@ -14,24 +14,17 @@ class Config:
     # Risk management defaults
     DEFAULT_RISK_MODE = "auto"       # "auto" or "manual"
     DEFAULT_RISK_PER_TRADE = 0.02    # 2% per trade (manual mode)
-    DEFAULT_DAILY_LOSS_LIMIT = 0.05  # 5% daily loss limit (manual mode)
+    # 일일 손실 한도: 사용자 지시로 25%까지 완화 (거래당 ~10% 리스크에서
+    # 5%면 한 번 손실에 그날이 끝나므로). MDD 하드캡과 동일 선상.
+    DEFAULT_DAILY_LOSS_LIMIT = 0.25
 
-    # ── 소액 계좌 안전장치 (리스크 수학 붕괴 방지) ──────────────
-    # 브로커 최소 lot(0.01) 강제 상향으로 실효 리스크가 하드캡을 넘으면
-    # 그 거래는 '조용히 초과 리스크를 지는' 대신 진입 자체를 거부한다.
-    REJECT_IF_MIN_LOT_EXCEEDS_CAP = True
-    # ── 소액 계좌 SL-핏 모드 (기본 활성 — $100 실계좌 운용의 정석) ──
-    # lot은 0.01이 바닥이라 못 줄이므로, 대신 손절 거리를 리스크 예산에
-    # 맞춰 조인다: 최대 SL 거리 = 잔고 × 하드캡5% ÷ (계약100 × 0.01랏) = $5.
-    # 단, 조인 SL이 노이즈 안(< MIN_SL_ATR_MULT × ATR)이면 그 거래는 건너뜀
-    # → 변동성이 낮은 구간에서만 거래가 성립 (수학이 맞을 때만 쏜다).
-    SMALL_ACCOUNT_FIT_SL = True
-    MIN_SL_ATR_MULT = 1.0     # 조인 SL이 최소 이만큼(ATR 배수)은 돼야 진입
-
-    # ⚠ 무리한 우회 스위치: True면 SL을 조이지도 않고 하드캡을 넘는
-    # 원래 SL 그대로 최소랏 강행 (거래당 리스크 8~13%). 연속 손실 몇 번이면
-    # 계좌가 죽는 수학. SL-핏 모드가 있으므로 켤 이유가 없음.
-    ALLOW_MIN_LOT_OVERRIDE = False
+    # ── 거래 단위 리스크 제한: 사용자 지시로 전부 해제 (2026-07-13) ──
+    # 최소랏 0.01 × 구조 SL(2.5×ATR)을 그대로 집행한다.
+    # $100 잔고 기준 거래당 리스크 약 8~13% — 사용자가 인지하고 선택한 값.
+    REJECT_IF_MIN_LOT_EXCEEDS_CAP = False   # 하드캡 초과 거부: 해제
+    SMALL_ACCOUNT_FIT_SL = False            # SL 조임 모드: 해제
+    MIN_SL_ATR_MULT = 1.0
+    ALLOW_MIN_LOT_OVERRIDE = True           # 최소랏 강행: 활성
 
     # ── Max Drawdown 하드캡 (계좌 생존의 최후 방어선) ───────────
     # 피크 자산 대비 이만큼 빠지면: 전 포지션 청산 + 대기주문 취소 + 자동매매 중단
