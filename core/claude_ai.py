@@ -130,7 +130,9 @@ Pine의 impulse=up이면 SELL, down이면 BUY가 기본 가설. 단 body_atr>3.0
 ═══ 시장 보고 (TradingView) ═══
 {json.dumps(payload, ensure_ascii=False, indent=1)}
 
-다음 JSON 형식으로만 응답하세요 (투명성 보고서 필수 — 전 필드 한국어):
+다음 JSON 형식으로만 응답하세요 (투명성 보고서 필수 — 전 필드 한국어).
+각 필드는 간결하게: market_analysis 2문장 이내, 근거/위험 각 항목 1줄,
+반드시 reasoning까지 완결된 JSON을 출력하세요:
 {{
   "market_analysis": "현재 시장 구조 종합 (2-3문장: MTF 정렬 상태, 오더플로우 상태)",
   "key_evidence": ["근거1", "근거2", "근거3"],
@@ -146,7 +148,8 @@ Pine의 impulse=up이면 SELL, down이면 BUY가 기본 가설. 단 body_atr>3.0
 }}"""
 
         try:
-            result = _extract_json(self._call(prompt, max_tokens=900))
+            # 투명성 보고서(한국어)가 길어 900토큰이면 절단됨 → 여유 있게
+            result = _extract_json(self._call(prompt, max_tokens=2000))
             if not result.get("stop_loss"):
                 result["stop_loss"] = payload.get("sl", 0)
             if not result.get("take_profit"):

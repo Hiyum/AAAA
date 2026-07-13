@@ -212,7 +212,11 @@ class TradingEngine:
                 self._log_ai_report(decision, confidence)
             if final not in ("BUY", "SELL") or confidence < min_conf:
                 if final in ("BUY", "SELL") or action in ("BUY", "SELL"):
-                    return {"message": f"AI 진입 보류: {decision.get('reasoning', '')}"}
+                    # 보류도 반드시 로그에 남긴다 (침묵 금지 - 투명성 원칙)
+                    why = decision.get("reasoning", "") or decision.get("market_analysis", "")
+                    self.log(f"[AI 진입 보류] AI:{final} 신뢰도 {confidence:.0%} "
+                             f"(기준 {min_conf:.0%}) | {why}", "WARNING")
+                    return {"message": f"AI 진입 보류: {why}"}
                 return {"message": "AI 자율 판단: 관망"}
 
             result = self._execute_entry(symbol, price, payload, decision, t0, unit=1)
@@ -290,13 +294,22 @@ class TradingEngine:
             check = self.risk.validate_effective_risk(balance, r["price"], sl, r["lot"],
                                                       specs["contract_size"])
             total_risk += check["risk_usd"]
-        if getattr(Config, "REJECT_IF_MIN_LOT_EXCEEDS_CAP", True):
-            if balance > 0 and total_risk / balance > self.risk.MAX_RISK_HARD_CAP:
-                msg = (f"진입 거부: 래더 총 리스크 ${total_risk:.2f} = 잔고의 "
-                       f"{total_risk/balance*100:.1f}% > 하드캡 "
-                       f"{self.risk.MAX_RISK_HARD_CAP*100:.0f}% (최소 주문단위 제약)")
-                self.log(f"[리스크 거부] {msg}", "WARNING")
-                return {"success": False, "message": msg}
+        over_cap = balance > 0 and total_risk / balance > self.risk.MAX_RISK_HARD_CAP
+        if over_cap and getattr(Config, "ALLOW_MIN_LOT_OVERRIDE", False):
+            # 소액 데모 전용: 래더를 최소랏 1건으로 축소해 강행 (위험 알고 켠 것)
+            rungs = [{"price": rungs[0]["price"], "lot": specs["volume_min"]}]
+            total_risk = abs(rungs[0]["price"] - sl) * specs["contract_size"] * specs["volume_min"]
+            self.log(f"[리스크 초과 강행] 최소랏 {specs['volume_min']} 1건으로 축소 진행 "
+                     f"(ALLOW_MIN_LOT_OVERRIDE=True) | 리스크 ${total_risk:.2f} = 잔고의 "
+                     f"{total_risk/balance*100:.1f}% - 소액 데모 전용 모드입니다", "WARNING")
+        elif over_cap and getattr(Config, "REJECT_IF_MIN_LOT_EXCEEDS_CAP", True):
+            msg = (f"진입 거부: 래더 총 리스크 ${total_risk:.2f} = 잔고의 "
+                   f"{total_risk/balance*100:.1f}% > 하드캡 "
+                   f"{self.risk.MAX_RISK_HARD_CAP*100:.0f}% (최소 주문단위 제약)")
+            self.log(f"[리스크 거부] {msg}", "WARNING")
+            self.log("→ 해결: ① 잔고 $1,000+ 데모 계좌로 교체(권장) 또는 "
+                     "② config.py의 ALLOW_MIN_LOT_OVERRIDE=True (소액 데모 전용)", "INFO")
+            return {"success": False, "message": msg}
 
         # ── 주문 배치 ───────────────────────────────────────
         ttl = getattr(Config, "LIMIT_TTL_MINUTES", 30)
@@ -382,6 +395,8 @@ class TradingEngine:
         self.db.insert_signal(payload, decision, executed=False)
         min_conf = getattr(Config, "REVERSAL_MIN_CONFIDENCE", 0.75)
         if str(decision.get("action", "")).upper() != action or conf < min_conf:
+            self.log(f"[리버설 보류] AI:{decision.get('action', '?')} 신뢰도 {conf:.0%} "
+                     f"(기준 {min_conf:.0%}) - 기존 포지션 유지 | {decision.get('reasoning', '')}")
             return {"message": f"리버설 보류 (기존 포지션 유지): {decision.get('reasoning', '')}"}
 
         self.log(f"[리버설 승인] {opposite[0]['type']} → {action} | 신뢰도 {conf:.0%}", "WARNING")
@@ -432,6 +447,8 @@ class TradingEngine:
         self.db.insert_signal(payload, decision, executed=False)
         if str(decision.get("action", "")).upper() != action or \
            conf < getattr(Config, "PYRAMID_MIN_CONFIDENCE", 0.8):
+            self.log(f"[피라미딩 보류] AI:{decision.get('action', '?')} 신뢰도 {conf:.0%} | "
+                     f"{decision.get('reasoning', '조건 미달')}")
             return {"message": f"피라미딩 보류: {decision.get('reasoning', '조건 미달')}"}
 
         self.log(f"[피라미딩 승인] {action} 증량 | 기존 +{payload['pyramid_request']['open_profit_r']}R | "

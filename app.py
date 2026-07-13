@@ -142,9 +142,13 @@ def tradingview_webhook():
     else:
         data.pop("secret", None)
 
+    mtf = data.get("mtf") or {}
+    of = data.get("of") or {}
     broadcast_log({
         "time": datetime.now().strftime("%H:%M:%S"),
-        "message": f"TradingView 수신: {data.get('symbol', '?')} @ {data.get('price', '?')} | 구조:{data.get('market_structure', '?')} CVD:{data.get('cvd', '?')}",
+        "message": (f"TradingView 수신: {data.get('symbol', '?')} @ {data.get('price', '?')} "
+                    f"| 신호:{data.get('action', '?')} | D:{mtf.get('d', '?')} H1:{mtf.get('h1', '?')} "
+                    f"| Δ:{of.get('delta_dir', '?')} 스윕:{data.get('sweep', '?')}"),
         "level": "INFO"
     })
 
