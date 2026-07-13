@@ -70,9 +70,17 @@ class Config:
     PYRAMID_SIZE_RATIO = 0.5       # 증량 물량 = 기본 물량 × 이 비율
 
     # ── 세션/보유 정책 ──────────────────────────────────────────
-    # 거래 세션 (UTC 기준). 신규 '진입'만 제한. 보유는 시간 제한 없음.
-    TRADE_SESSION_START_HOUR = 7    # UTC
-    TRADE_SESSION_END_HOUR = 20     # UTC
+    # 거래 세션: 폐기됨 — 24시간 진입 허용 (0~24 = 제한 없음).
+    # ⚠ AI_AUTONOMOUS=True면 이제 하루 ~96회 호출로 크레딧 약 2배 소모.
+    TRADE_SESSION_START_HOUR = 0    # UTC
+    TRADE_SESSION_END_HOUR = 24     # UTC
+
+    # ── 리버설 (백테스트 실측 수익원) ───────────────────────────
+    # 10.5개월 1,078건 실측: 설계 청산(TP1/트레일)은 -$196, 보유 중
+    # 반대 극단 신호에서 포지션을 뒤집는 리버설이 +$294를 벌었다.
+    # 보유 중 반대 방향 신호 도착 → AI 고신뢰 동의 시 청산+역방향 재진입.
+    REVERSAL_ENABLED = True
+    REVERSAL_MIN_CONFIDENCE = 0.75
     # 당일 강제 청산: 폐기됨(#10 지침). 보유 기간은 시장 구조가 결정.
     # True로 되돌리면 이전처럼 매일 DAILY_FLATTEN_HOUR에 전량 청산.
     ENFORCE_DAY_CLOSE = False

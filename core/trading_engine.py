@@ -125,11 +125,18 @@ class TradingEngine:
             if closed:
                 return closed
             managed = self._manage_stops(positions, payload, price)
-            # 같은 방향의 '완전히 새로운' 신호 → 피라미딩 검토
-            if action in ("BUY", "SELL") and getattr(Config, "PYRAMID_ENABLED", False):
-                pyr = self._check_pyramid(symbol, price, payload, action, positions, t0)
-                if pyr:
-                    return pyr
+            if action in ("BUY", "SELL"):
+                # 반대 방향 신호 → 리버설 검토 (백테스트 실측 수익원)
+                opposite = [p for p in positions if p["type"] != action]
+                if opposite and getattr(Config, "REVERSAL_ENABLED", True):
+                    rev = self._check_reversal(symbol, price, payload, action, opposite, t0)
+                    if rev:
+                        return rev
+                # 같은 방향의 '완전히 새로운' 신호 → 피라미딩 검토
+                if getattr(Config, "PYRAMID_ENABLED", False):
+                    pyr = self._check_pyramid(symbol, price, payload, action, positions, t0)
+                    if pyr:
+                        return pyr
             return managed
 
         return self._check_entry(symbol, price, payload, action, t0)
@@ -233,7 +240,7 @@ class TradingEngine:
 
     def _execute_entry(self, symbol: str, price: float, payload: dict,
                        decision: dict, t0: float, unit: int = 1,
-                       size_ratio: float = 1.0) -> dict:
+                       size_ratio: float = 1.0, allow_open: bool = False) -> dict:
         """리스크 검증 → 지정가 래더 배치 (시장가 진입 폐기)"""
         final = str(decision["action"]).upper()
         confidence = float(decision.get("confidence", 0))
@@ -297,7 +304,8 @@ class TradingEngine:
         placed = []
         with self._entry_lock:
             open_units = len(self.mt5.get_open_positions())
-            if unit == 1 and open_units >= 1:
+            # allow_open: 리버설 직후(방금 청산해 브로커 목록 갱신이 지연될 수 있음)
+            if unit == 1 and not allow_open and open_units >= 1:
                 return {"success": False, "message": "락 재확인: 이미 포지션 존재 - 진입 취소"}
             for r in rungs:
                 if use_ladder:
@@ -347,6 +355,48 @@ class TradingEngine:
                  f"총 리스크 ${total_risk:.2f} | TTL {ttl}분 | 레이턴시 {latency_ms}ms", "SUCCESS")
         return {"success": True, "message": f"{kind} {len(placed)}건 배치",
                 "rungs": [r for r, _ in placed]}
+
+    # ── 리버설: 반대 극단 신호 → 청산 + 역방향 재진입 ────────
+
+    def _check_reversal(self, symbol: str, price: float, payload: dict,
+                        action: str, opposite: list, t0: float) -> Optional[dict]:
+        """
+        보유 중 반대 방향 신호(반대편 임펄스/스윕 극단) 도착 시:
+        AI가 고신뢰로 동의하면 기존 포지션을 청산하고 즉시 역방향 래더 진입.
+        10.5개월 백테스트에서 이 경로(83건, +$294)가 전체 순익의 원천이었다.
+        """
+        blocked = self._entry_gates(symbol, action, payload)
+        if blocked:
+            return None
+
+        payload = dict(payload)
+        payload["trades_left_today"] = getattr(Config, "MAX_TRADES_PER_DAY", 6) - self._trades_today
+        payload["reversal_request"] = {
+            "note": "반대 방향 포지션 보유 중. 이 신호가 명확한 반대 극단(임펄스/스윕)이고 "
+                    "구조가 실제로 전환됐다고 판단될 때만 리버설을 승인하라. "
+                    "일시적 되돌림이면 HOLD (기존 포지션 유지가 기본값).",
+            "open_positions": [{"type": p["type"], "profit": p.get("profit", 0)} for p in opposite],
+        }
+        decision = self.ai.analyze_tradingview(payload)
+        conf = float(decision.get("confidence", 0))
+        self.db.insert_signal(payload, decision, executed=False)
+        min_conf = getattr(Config, "REVERSAL_MIN_CONFIDENCE", 0.75)
+        if str(decision.get("action", "")).upper() != action or conf < min_conf:
+            return {"message": f"리버설 보류 (기존 포지션 유지): {decision.get('reasoning', '')}"}
+
+        self.log(f"[리버설 승인] {opposite[0]['type']} → {action} | 신뢰도 {conf:.0%}", "WARNING")
+        self._log_ai_report(decision, conf)
+        for pos in opposite:
+            r = self.mt5.close_position(pos["ticket"])
+            if r.get("success"):
+                self._record_closed(pos["ticket"], r.get("profit", pos.get("profit", 0)),
+                                    r.get("price"), "reversal")
+                self.log(f"[리버설 청산] #{pos['ticket']} {pos['type']} | "
+                         f"손익 {r.get('profit', 0):+.2f}$", "SUCCESS")
+            else:
+                self.log(f"[리버설 청산 실패] #{pos['ticket']}: {r.get('message')} - 재진입 중단", "ERROR")
+                return {"message": "리버설 실패: 기존 포지션 청산 불가"}
+        return self._execute_entry(symbol, price, payload, decision, t0, unit=1, allow_open=True)
 
     # ── 피라미딩 (#9) ───────────────────────────────────────
 

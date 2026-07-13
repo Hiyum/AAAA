@@ -2,7 +2,7 @@
 // =============================================================
 //  ClaudeAI GOLD Structure v8 — MTF · 오더플로우 프록시 · 지정가
 // =============================================================
-//  대상: GOLD (XAUUSD) / 15분봉 / 세션 07-20 GMT (진입만 제한)
+//  대상: GOLD (XAUUSD) / 15분봉 / 24시간 거래 (세션 제한 없음)
 //
 //  v7 → v8 핵심 변경 (실전-백테스트 정합):
 //  ① 진입: 시장가 폐기 → 신호가 ± 0.3×ATR 지정가 (2봉 내 미체결 취소)
@@ -28,7 +28,7 @@ strategy("ClaudeAI GOLD Structure v8", overlay=true,
 // ── 입력 ────────────────────────────────────────────────
 symbolName  = input.string("GOLD#", "MT5 종목명 (브로커 표기)")
 whSecret    = input.string("", "웹훅 시크릿 (.env WEBHOOK_SECRET과 동일하게)")
-tradeSess   = input.session("0700-2000", "진입 허용 세션 (GMT)")
+tradeSess   = input.session("0000-2400", "진입 허용 세션 (기본: 24시간)")
 sessionTZ   = input.string("GMT", "시간대")
 bodyK       = input.float(0.8, "임펄스 몸통 = ATR × (낮을수록 거래↑)", minval=0.4, maxval=2.0, step=0.1)
 atrLen      = input.int(14, "ATR 기간")
@@ -126,21 +126,27 @@ if shortSignal and strategy.position_size == 0
     slAtr := atrVal
 
 // TTL: 미체결 지정가 취소 (서버 LIMIT_TTL_MINUTES와 동일한 2봉)
+// ※ 포지션 보유 중 반대편 대기 지정가는 '의도적으로' 살려둔다 (리버설).
+//   10.5개월 실측: 설계된 청산(TP1/RUN)은 합계 -$196, 반대편 극단에서
+//   포지션을 뒤집는 리버설 체결이 +$294 — 이 전략의 실제 수익원이다.
 if strategy.position_size == 0 and not na(pendingBar) and bar_index - pendingBar >= limitTTL
     strategy.cancel("Long")
     strategy.cancel("Short")
     pendingBar := na
 
-// ── 포지션 상태 ─────────────────────────────────────────
+// ── 포지션 상태 (리버설 대응: 방향이 바뀌면 SL/수량 재초기화) ──
+// 이전 버전 버그: 리버설로 방향이 뒤집혀도 stopLvl이 구 포지션 값으로
+// 남아 새 포지션이 즉시 청산되던 문제 → posSign 전환 감지로 해결
 entryPrice = strategy.opentrades > 0 ? strategy.opentrades.entry_price(strategy.opentrades - 1) : na
+posSign = strategy.position_size > 0 ? 1 : strategy.position_size < 0 ? -1 : 0
 var float stopLvl = na
 var float initialQty = na
 
-if strategy.position_size != 0 and na(initialQty)
+if posSign != 0 and posSign != posSign[1]
     initialQty := math.abs(strategy.position_size)
     pendingBar := na
-    stopLvl := strategy.position_size > 0 ? entryPrice - slAtr * slMult : entryPrice + slAtr * slMult
-if strategy.position_size == 0
+    stopLvl := posSign > 0 ? entryPrice - slAtr * slMult : entryPrice + slAtr * slMult
+if posSign == 0
     initialQty := na
     stopLvl := na
 
