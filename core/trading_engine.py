@@ -60,6 +60,12 @@ class TradingEngine:
         # 실시간 감시 상태
         self._tick_window: deque = deque(maxlen=60)   # (ts, mid)
         self._last_intervention = 0.0
+        self._vmin_cache: Dict[str, float] = {}
+
+    def _symbol_vmin(self, symbol: str) -> float:
+        if symbol not in self._vmin_cache:
+            self._vmin_cache[symbol] = self.mt5.get_symbol_specs(symbol)["volume_min"]
+        return self._vmin_cache[symbol]
 
     def log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -295,7 +301,31 @@ class TradingEngine:
                                                       specs["contract_size"])
             total_risk += check["risk_usd"]
         over_cap = balance > 0 and total_risk / balance > self.risk.MAX_RISK_HARD_CAP
-        if over_cap and getattr(Config, "ALLOW_MIN_LOT_OVERRIDE", False):
+        if over_cap and getattr(Config, "SMALL_ACCOUNT_FIT_SL", True):
+            # SL-핏: lot(0.01 바닥)을 못 줄이니 손절 거리를 예산에 맞춘다.
+            # 최대 SL 거리 = 리스크 예산($) ÷ (계약크기 × 최소랏)
+            vmin = specs["volume_min"]
+            budget = balance * self.risk.MAX_RISK_HARD_CAP
+            max_dist = budget / (specs["contract_size"] * vmin)
+            min_dist = atr * getattr(Config, "MIN_SL_ATR_MULT", 1.0) if atr > 0 else max_dist + 1
+            if max_dist < min_dist:
+                msg = (f"진입 보류(소액 SL-핏): 예산상 최대 손절폭 ${max_dist:.2f} < "
+                       f"노이즈 하한 {getattr(Config, 'MIN_SL_ATR_MULT', 1.0)}×ATR(${min_dist:.2f}) "
+                       f"- 지금 변동성에선 ${balance:.0f} 계좌로 안전한 진입 불가, 조용한 구간 대기")
+                self.log(f"[SL-핏 보류] {msg}", "WARNING")
+                return {"success": False, "message": msg}
+            rung_p = rungs[0]["price"]
+            sl = rung_p - max_dist if final == "BUY" else rung_p + max_dist
+            # 손익비 유지: TP가 조인 SL 기준 1.5R보다 가깝면 1.5R로 확장
+            min_tp = rung_p + max_dist * 1.5 if final == "BUY" else rung_p - max_dist * 1.5
+            if (final == "BUY" and tp < min_tp) or (final == "SELL" and tp > min_tp):
+                tp = min_tp
+            rungs = [{"price": rung_p, "lot": vmin}]
+            total_risk = max_dist * specs["contract_size"] * vmin
+            self.log(f"[SL-핏 적용] 최소랏 {vmin} 1건 | SL을 예산에 맞춰 ${max_dist:.2f}로 "
+                     f"조임 (구조 SL 대신) | 리스크 ${total_risk:.2f} = 잔고의 "
+                     f"{total_risk/balance*100:.1f}% (하드캡 준수)", "WARNING")
+        elif over_cap and getattr(Config, "ALLOW_MIN_LOT_OVERRIDE", False):
             # 소액 데모 전용: 래더를 최소랏 1건으로 축소해 강행 (위험 알고 켠 것)
             rungs = [{"price": rungs[0]["price"], "lot": specs["volume_min"]}]
             total_risk = abs(rungs[0]["price"] - sl) * specs["contract_size"] * specs["volume_min"]
@@ -505,16 +535,26 @@ class TradingEngine:
             took = self._took_partial.get(ticket, False)
             new_sl, new_tp = sl, tp
 
+            # 최소랏(0.01)은 절반 청산이 불가능 → 부분익절 생략, 본전 잠금 + 러너 유지
+            vmin = self._symbol_vmin(pos["symbol"])
+            can_split = pos["volume"] > vmin * 1.5
+
             if pos["type"] == "BUY":
                 # ① 0.75R 부분익절 + 본전 잠금
                 if not took and price >= entry + risk_dist * 0.75:
-                    r = self.mt5.close_position(ticket, volume=pos["volume"] * 0.5)
-                    if r.get("success"):
+                    if can_split:
+                        r = self.mt5.close_position(ticket, volume=pos["volume"] * 0.5)
+                        if r.get("success"):
+                            self._took_partial[ticket] = True
+                            took = True
+                            self.db.close_trade(ticket, r.get("profit", 0), r.get("price"),
+                                                "partial", partial=True)
+                            self.log(f"[TP1 부분익절] #{ticket} 50% 청산 (+0.75R) + 본전 잠금", "SUCCESS")
+                    else:
                         self._took_partial[ticket] = True
                         took = True
-                        self.db.close_trade(ticket, r.get("profit", 0), r.get("price"),
-                                            "partial", partial=True)
-                        self.log(f"[TP1 부분익절] #{ticket} 50% 청산 (+0.75R) + 본전 잠금", "SUCCESS")
+                        self.log(f"[본전 잠금] #{ticket} +0.75R 도달 - 최소랏이라 부분익절 생략, "
+                                 f"SL 본전 이동 + 러너 유지", "SUCCESS")
                     new_sl = max(new_sl or 0, entry)
                 # ② 구조 기반 트레일 (스윙 저점 뒤)
                 if took and swing_lo > 0:
@@ -531,13 +571,19 @@ class TradingEngine:
                         new_tp = max(price + atr * 0.5, entry + risk_dist * 0.5)
             else:  # SELL
                 if not took and price <= entry - risk_dist * 0.75:
-                    r = self.mt5.close_position(ticket, volume=pos["volume"] * 0.5)
-                    if r.get("success"):
+                    if can_split:
+                        r = self.mt5.close_position(ticket, volume=pos["volume"] * 0.5)
+                        if r.get("success"):
+                            self._took_partial[ticket] = True
+                            took = True
+                            self.db.close_trade(ticket, r.get("profit", 0), r.get("price"),
+                                                "partial", partial=True)
+                            self.log(f"[TP1 부분익절] #{ticket} 50% 청산 (+0.75R) + 본전 잠금", "SUCCESS")
+                    else:
                         self._took_partial[ticket] = True
                         took = True
-                        self.db.close_trade(ticket, r.get("profit", 0), r.get("price"),
-                                            "partial", partial=True)
-                        self.log(f"[TP1 부분익절] #{ticket} 50% 청산 (+0.75R) + 본전 잠금", "SUCCESS")
+                        self.log(f"[본전 잠금] #{ticket} +0.75R 도달 - 최소랏이라 부분익절 생략, "
+                                 f"SL 본전 이동 + 러너 유지", "SUCCESS")
                     new_sl = min(new_sl, entry) if new_sl and new_sl > 0 else entry
                 if took and swing_hi > 0:
                     candidate = swing_hi + atr * 0.3
