@@ -1,138 +1,220 @@
 //@version=5
 // =============================================================
-//  ClaudeAI GOLD Momentum Fade v7 — 빠른 진입 · 고빈도 · 흑자
+//  ClaudeAI GOLD Structure v8 — MTF · 오더플로우 프록시 · 지정가
 // =============================================================
-//  대상: GOLD (XAUUSD) / 15분봉 / 세션 07-20 GMT / 당일 청산
+//  대상: GOLD (XAUUSD) / 15분봉 / 세션 07-20 GMT (진입만 제한)
 //
-//  ── 발견 (576일 × 여러 국면 실측) ───────────────────────
-//  금은 모멘텀을 '추격'하면 죽고(임펄스 추격 PF 0.5, 전부 손실),
-//  '되받아치면' 산다. 큰 임펄스 캔들 직후 금은 되돌린다.
-//  → 급등 임펄스 터지는 순간 즉시 SHORT / 급락 순간 즉시 LONG
-//  느린 돌파 확인이 아니라, 임펄스 봉에서 바로 진입 = 빠른 진입.
-//
-//  ── 실측 성적 (576일, 비용 포함) ────────────────────────
-//  기본값: 거래 ~3/일 | 승률 60% | PF 1.16 | 순익 +$380
-//  (빈도형 설정 가능: 하루 3.8회까지, PF 1.17 유지)
-//
-//  ── 규칙 ────────────────────────────────────────────────
-//  진입: |몸통| >= 0.8×ATR 인 방향성 캔들 → 반대로 즉시 진입
-//  손절: 2.5×ATR / 부분익절: 0.75R에서 50% + 본전 잠금
-//  트레일: 2.5×ATR / 20:00 GMT 전량 청산
+//  v7 → v8 핵심 변경 (실전-백테스트 정합):
+//  ① 진입: 시장가 폐기 → 신호가 ± 0.3×ATR 지정가 (2봉 내 미체결 취소)
+//     = 서버의 지정가 래더와 동일한 체결 모델로 백테스트
+//  ② 청산: 0.75R 50% 부분익절 + 본전 + '구조 트레일'(스윙 ± 0.3×ATR)
+//     = 서버 _manage_stops()와 완전 동일 규칙
+//  ③ 당일 강제 청산 폐기 — 보유는 시장 구조가 결정 (오버나이트 허용)
+//  ④ 신호 확장: 임펄스 페이드 + 유동성 스윕(stop hunt) 페이드
+//  ⑤ webhook JSON에 MTF(1D/4H/1H/30M) + 오더플로우 프록시(1분 분해
+//     delta/CVD/다이버전스) + 스윙/VWAP/FVG 구조 데이터 동봉
+//     ※ 진짜 Footprint(가격대별 Bid/Ask)는 TradingView가 제공하지
+//        않음 — 1분봉 분해 기반 '프록시'다. 방향·다이버전스만 신뢰.
 //
 //  [붙여넣기 전] Pine Editor 전부 삭제(Ctrl+A→Delete)
+//  [알람] 반드시 "Any alert() function call" 유형으로 생성
 // =============================================================
-strategy("ClaudeAI GOLD MomFade v7", overlay=true,
+strategy("ClaudeAI GOLD Structure v8", overlay=true,
      initial_capital=100,
      default_qty_type=strategy.cash, default_qty_value=1500,
      commission_type=strategy.commission.percent, commission_value=0.01,
      slippage=2, process_orders_on_close=true)
 
-// ── 입력 (실측 최적값) ──────────────────────────────────
+// ── 입력 ────────────────────────────────────────────────
 symbolName  = input.string("GOLD#", "MT5 종목명 (브로커 표기)")
-tradeSess   = input.session("0700-2000", "거래 세션 (GMT)")
-flattenSess = input.session("0700-2000", "보유 허용 - 끝나면 청산 (GMT)")
+whSecret    = input.string("", "웹훅 시크릿 (.env WEBHOOK_SECRET과 동일하게)")
+tradeSess   = input.session("0700-2000", "진입 허용 세션 (GMT)")
 sessionTZ   = input.string("GMT", "시간대")
 bodyK       = input.float(0.8, "임펄스 몸통 = ATR × (낮을수록 거래↑)", minval=0.4, maxval=2.0, step=0.1)
 atrLen      = input.int(14, "ATR 기간")
 slMult      = input.float(2.5, "손절 = ATR ×", minval=1.0, maxval=4.0, step=0.25)
-tp1R        = input.float(0.75, "부분익절(50%) = R × (낮을수록 승률↑)", minval=0.5, maxval=2.0, step=0.25)
-trailAtr    = input.float(2.5, "트레일링 = ATR ×", minval=1.0, maxval=4.0, step=0.25)
+tp1R        = input.float(0.75, "부분익절(50%) = R ×", minval=0.5, maxval=2.0, step=0.25)
+limitOff    = input.float(0.3, "지정가 오프셋 = ATR × (서버 래더 rung1과 동일)", minval=0.0, maxval=1.0, step=0.05)
+limitTTL    = input.int(2, "지정가 유효 봉 수 (미체결 취소)", minval=1, maxval=8)
 cooldownBars = input.int(1, "재진입 대기 봉 수", minval=0, maxval=10)
-useRegime   = input.bool(false, "레짐 필터 (EMA200 방향으로만 - 거래↓ 안정↑)")
+pivotLen    = input.int(3, "스윙 피벗 길이", minval=2, maxval=10)
 
-// ── 지표 ────────────────────────────────────────────────
+// ── 기본 지표 ───────────────────────────────────────────
 atrVal   = ta.atr(atrLen)
 emaTrend = ta.ema(close, 200)
 rsi14    = ta.rsi(close, 14)
+vwapVal  = ta.vwap
 bodyVal  = close - open
-
 inWindow = not na(time(timeframe.period, tradeSess, sessionTZ))
-holdTime = time(timeframe.period, flattenSess, sessionTZ)
 
-// ── 진입 조건 (임펄스 페이드) ───────────────────────────
+// ── 다중 시간 프레임 (1D/4H/1H/30M 구조·추세) ───────────
+f_dir(tf) =>
+    request.security(syminfo.tickerid, tf, close > ta.ema(close, 50) ? 1 : -1,
+         barmerge.gaps_off, barmerge.lookahead_off)
+dDir  = f_dir("D")
+h4Dir = f_dir("240")
+h1Dir = f_dir("60")
+m30Dir = f_dir("30")
+f_str(d) => d > 0 ? "up" : "down"
+
+// ── 오더플로우 프록시 (1분봉 분해 — Footprint 대체) ─────
+buyArr  = request.security_lower_tf(syminfo.tickerid, "1", close >= open ? volume : 0.0)
+sellArr = request.security_lower_tf(syminfo.tickerid, "1", close < open ? volume : 0.0)
+buyVol  = array.size(buyArr) > 0 ? array.sum(buyArr) : (close >= open ? volume : 0.0)
+sellVol = array.size(sellArr) > 0 ? array.sum(sellArr) : (close < open ? volume : 0.0)
+delta   = buyVol - sellVol
+totVol  = buyVol + sellVol
+// 세션 누적 델타 (CVD)
+var float cvd = 0.0
+newDay = ta.change(time("D")) != 0
+if newDay
+    cvd := 0.0
+cvd += delta
+cvdSlope = cvd > cvd[1] ? "up" : "down"
+// 델타 다이버전스: 가격 신고/신저 vs 델타 약화
+deltaDiv = close > close[1] and high >= ta.highest(high, 10) and delta < delta[1] ? "bear_div" :
+           close < close[1] and low <= ta.lowest(low, 10) and delta > delta[1] ? "bull_div" : "none"
+// 임밸런스 프록시: 매수 물량 비중
+imb = totVol > 0 ? math.round(buyVol / totVol * 100.) / 100. : 0.5
+
+// ── 시장 구조: 스윙 / 유동성 스윕 / FVG ─────────────────
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low, pivotLen, pivotLen)
+var float swingHi = na
+var float swingLo = na
+if not na(ph)
+    swingHi := ph
+if not na(pl)
+    swingLo := pl
+// 유동성 스윕: 스윙을 꼬리로 청소하고 되돌아 마감 (stop hunt)
+sweepUp = not na(swingHi) and high > swingHi and close < swingHi   // 고점 청소 → 숏 근거
+sweepDn = not na(swingLo) and low < swingLo and close > swingLo    // 저점 청소 → 롱 근거
+sweepStr = sweepUp ? "high_sweep" : sweepDn ? "low_sweep" : "none"
+// Fair Value Gap (최근 미충전 갭의 중앙값)
+var float fvgUp = na    // 아래쪽 지지 갭 (bullish FVG)
+var float fvgDn = na    // 위쪽 저항 갭 (bearish FVG)
+if low > high[2]
+    fvgUp := (low + high[2]) / 2
+if high < low[2]
+    fvgDn := (high + low[2]) / 2
+if not na(fvgUp) and low < fvgUp
+    fvgUp := na          // 충전됨
+if not na(fvgDn) and high > fvgDn
+    fvgDn := na
+
+// ── 진입 신호: 임펄스 페이드 + 스윕 페이드 ──────────────
 barsSinceExit = strategy.closedtrades > 0 ? bar_index - strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) : cooldownBars + 1
 cooldownOK = barsSinceExit >= cooldownBars
 
-impulseUp = bodyVal >= atrVal * bodyK and close > open     // 급등 임펄스
-impulseDn = -bodyVal >= atrVal * bodyK and close < open    // 급락 임펄스
+impulseUp = bodyVal >= atrVal * bodyK and close > open
+impulseDn = -bodyVal >= atrVal * bodyK and close < open
 
-// 급등 → 페이드 숏 / 급락 → 페이드 롱
-regOKs = not useRegime or close < emaTrend
-regOKl = not useRegime or close > emaTrend
-shortSignal = inWindow and cooldownOK and impulseUp and regOKs
-longSignal  = inWindow and cooldownOK and impulseDn and regOKl
+shortSignal = inWindow and cooldownOK and (impulseUp or sweepUp)
+longSignal  = inWindow and cooldownOK and (impulseDn or sweepDn)
 
-// ── 포지션 상태 ─────────────────────────────────────────
-var float stopLvl = na
-var float riskAmt = na
-var bool tookPartial = false
-if strategy.position_size == 0
-    tookPartial := false
+// ── 진입 (지정가 — 서버 래더와 동일 체결 모델) ──────────
+var int pendingBar = na
+var float slAtr = na
 
-entryPrice = strategy.opentrades > 0 ? strategy.opentrades.entry_price(strategy.opentrades - 1) : na
-
-// ── 진입 (임펄스 봉에서 즉시) ───────────────────────────
 if longSignal and strategy.position_size == 0
-    strategy.entry("Long", strategy.long)
-    stopLvl := close - atrVal * slMult
-    riskAmt := atrVal * slMult
+    strategy.entry("Long", strategy.long, limit=close - atrVal * limitOff)
+    pendingBar := bar_index
+    slAtr := atrVal
 
 if shortSignal and strategy.position_size == 0
-    strategy.entry("Short", strategy.short)
-    stopLvl := close + atrVal * slMult
-    riskAmt := atrVal * slMult
+    strategy.entry("Short", strategy.short, limit=close + atrVal * limitOff)
+    pendingBar := bar_index
+    slAtr := atrVal
 
-// ── 청산 (부분익절 + 본전 + 트레일링) ───────────────────
-if strategy.position_size > 0 and not na(entryPrice) and not na(riskAmt) and riskAmt > 0
-    if not tookPartial and high >= entryPrice + riskAmt * tp1R
-        strategy.close("Long", qty_percent=50, comment="TP1")
-        tookPartial := true
-        stopLvl := math.max(stopLvl, entryPrice)
-    if tookPartial
-        stopLvl := math.max(stopLvl, close - atrVal * trailAtr)
-    strategy.exit("L-X", "Long", stop=stopLvl)
+// TTL: 미체결 지정가 취소 (서버 LIMIT_TTL_MINUTES와 동일한 2봉)
+if strategy.position_size == 0 and not na(pendingBar) and bar_index - pendingBar >= limitTTL
+    strategy.cancel("Long")
+    strategy.cancel("Short")
+    pendingBar := na
 
-if strategy.position_size < 0 and not na(entryPrice) and not na(riskAmt) and riskAmt > 0
-    if not tookPartial and low <= entryPrice - riskAmt * tp1R
-        strategy.close("Short", qty_percent=50, comment="TP1")
-        tookPartial := true
+// ── 포지션 상태 ─────────────────────────────────────────
+entryPrice = strategy.opentrades > 0 ? strategy.opentrades.entry_price(strategy.opentrades - 1) : na
+var float stopLvl = na
+var float initialQty = na
+
+if strategy.position_size != 0 and na(initialQty)
+    initialQty := math.abs(strategy.position_size)
+    pendingBar := na
+    stopLvl := strategy.position_size > 0 ? entryPrice - slAtr * slMult : entryPrice + slAtr * slMult
+if strategy.position_size == 0
+    initialQty := na
+    stopLvl := na
+
+tookPartial = not na(initialQty) and math.abs(strategy.position_size) < initialQty - initialQty * 0.01
+
+// ── 청산: 0.75R 50% 부분익절 + 본전 + 구조 트레일 ───────
+// (서버 _manage_stops()와 규칙 동일 — 백테스트=실거래)
+if strategy.position_size > 0 and not na(entryPrice) and not na(slAtr)
+    riskAmt = slAtr * slMult
+    if not tookPartial
+        strategy.exit("L-TP1", "Long", qty_percent=50, limit=entryPrice + riskAmt * tp1R, stop=stopLvl)
+    else
+        stopLvl := math.max(stopLvl, entryPrice)                       // 본전 잠금
+        if not na(swingLo)
+            stopLvl := math.max(stopLvl, swingLo - atrVal * 0.3)       // 구조 트레일
+    strategy.exit("L-RUN", "Long", stop=stopLvl)
+
+if strategy.position_size < 0 and not na(entryPrice) and not na(slAtr)
+    riskAmt = slAtr * slMult
+    if not tookPartial
+        strategy.exit("S-TP1", "Short", qty_percent=50, limit=entryPrice - riskAmt * tp1R, stop=stopLvl)
+    else
         stopLvl := math.min(stopLvl, entryPrice)
-    if tookPartial
-        stopLvl := math.min(stopLvl, close + atrVal * trailAtr)
-    strategy.exit("S-X", "Short", stop=stopLvl)
+        if not na(swingHi)
+            stopLvl := math.min(stopLvl, swingHi + atrVal * 0.3)
+    strategy.exit("S-RUN", "Short", stop=stopLvl)
 
-// 세션 종료: 전량 청산
-holdEnded = not na(holdTime[1]) and na(holdTime)
-if holdEnded
-    strategy.close_all(comment="당일청산")
-
-// ── Webhook JSON ────────────────────────────────────────
-sigAction = holdEnded ? "CLOSE_ALL" : longSignal ? "BUY" : shortSignal ? "SELL" : "HOLD"
+// ── Webhook JSON (매 봉 마감 — 구조화 시장 보고) ────────
+sigAction = longSignal ? "BUY" : shortSignal ? "SELL" : "HOLD"
 sl_ = sigAction == "SELL" ? close + atrVal * slMult : close - atrVal * slMult
 tp_ = sigAction == "SELL" ? close - atrVal * slMult * 2 : close + atrVal * slMult * 2
-trendStr = close > emaTrend ? "bullish" : "bearish"
 impStr = impulseUp ? "up" : impulseDn ? "down" : "none"
 
-buildJson(action, slv, tpv) =>
+f_num(x) => na(x) ? "0" : str.tostring(x, format.mintick)
+
+buildJson() =>
     '{"symbol": "' + symbolName + '"' +
-      ', "action": "' + action + '"' +
-      ', "mode": "GOLD_MOMFADE"' +
+      (whSecret != "" ? ', "secret": "' + whSecret + '"' : "") +
+      ', "action": "' + sigAction + '"' +
+      ', "mode": "GOLD_STRUCT_V8"' +
       ', "price": ' + str.tostring(close, format.mintick) +
-      ', "market_structure": "' + trendStr + '"' +
       ', "impulse": "' + impStr + '"' +
       ', "body_atr": ' + str.tostring(atrVal > 0 ? bodyVal / atrVal : 0, "#.##") +
       ', "rsi": ' + str.tostring(rsi14, "#.#") +
       ', "atr": ' + str.tostring(atrVal, format.mintick) +
       ', "ema200": ' + str.tostring(emaTrend, format.mintick) +
+      ', "vwap": ' + f_num(vwapVal) +
+      ', "swing_hi": ' + f_num(swingHi) +
+      ', "swing_lo": ' + f_num(swingLo) +
+      ', "sweep": "' + sweepStr + '"' +
+      ', "fvg_up": ' + f_num(fvgUp) +
+      ', "fvg_dn": ' + f_num(fvgDn) +
+      ', "mtf": {"d": "' + f_str(dDir) + '", "h4": "' + f_str(h4Dir) +
+                '", "h1": "' + f_str(h1Dir) + '", "m30": "' + f_str(m30Dir) + '"}' +
+      ', "of": {"delta": ' + str.tostring(delta, "#") +
+               ', "delta_dir": "' + (delta >= 0 ? "buy" : "sell") + '"' +
+               ', "cvd_slope": "' + cvdSlope + '"' +
+               ', "delta_div": "' + deltaDiv + '"' +
+               ', "buy_ratio": ' + str.tostring(imb, "#.##") + '}' +
       ', "in_session": ' + (inWindow ? "true" : "false") +
-      ', "sl": ' + str.tostring(slv, format.mintick) +
-      ', "tp": ' + str.tostring(tpv, format.mintick) +
+      ', "sl": ' + str.tostring(sl_, format.mintick) +
+      ', "tp": ' + str.tostring(tp_, format.mintick) +
       ', "timeframe": "' + timeframe.period + '"}'
 
-alert(buildJson(sigAction, sl_, tp_), alert.freq_once_per_bar_close)
+alert(buildJson(), alert.freq_once_per_bar_close)
 
 // ── 시각화 ──────────────────────────────────────────────
 plot(emaTrend, "EMA200", color.new(color.red, 40), 1)
+plot(vwapVal, "VWAP", color.new(color.blue, 40), 1)
+plot(swingHi, "스윙 고점", color.new(color.orange, 60), 1, plot.style_linebr)
+plot(swingLo, "스윙 저점", color.new(color.teal, 60), 1, plot.style_linebr)
 bgcolor(inWindow ? na : color.new(color.gray, 93))
-plotshape(longSignal,  "페이드 롱",  shape.triangleup,   location.belowbar, color.green, size=size.small)
-plotshape(shortSignal, "페이드 숏", shape.triangledown, location.abovebar, color.red,   size=size.small)
+plotshape(longSignal,  "롱 신호",  shape.triangleup,   location.belowbar, color.green, size=size.small)
+plotshape(shortSignal, "숏 신호", shape.triangledown, location.abovebar, color.red,   size=size.small)
+plotshape(sweepUp, "고점 스윕", shape.xcross, location.abovebar, color.purple, size=size.tiny)
+plotshape(sweepDn, "저점 스윕", shape.xcross, location.belowbar, color.purple, size=size.tiny)

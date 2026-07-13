@@ -118,10 +118,6 @@ def tradingview_webhook():
       "timeframe": "M5"
     }
     """
-    secret = request.headers.get("X-Webhook-Secret", "")
-    if Config.WEBHOOK_SECRET and secret != Config.WEBHOOK_SECRET:
-        return jsonify({"error": "인증 실패"}), 403
-
     # TradingView는 Content-Type을 text/plain으로 보내므로 request.json이 실패함.
     # force=True로 강제 파싱하고, 그래도 안 되면 raw 본문을 직접 json.loads.
     data = request.get_json(force=True, silent=True)
@@ -137,6 +133,15 @@ def tradingview_webhook():
             })
             return jsonify({"error": "JSON 형식이 아닙니다. TradingView 알람을 'Any alert() function call'로 만들었는지 확인하세요."}), 200
 
+    # 인증: TradingView는 커스텀 헤더를 못 보내므로 payload의 secret 필드로 검증
+    # (Pine 스크립트의 '웹훅 시크릿' 입력값. 헤더 방식도 병행 지원)
+    if Config.WEBHOOK_SECRET:
+        provided = request.headers.get("X-Webhook-Secret", "") or str(data.pop("secret", ""))
+        if provided != Config.WEBHOOK_SECRET:
+            return jsonify({"error": "인증 실패"}), 403
+    else:
+        data.pop("secret", None)
+
     broadcast_log({
         "time": datetime.now().strftime("%H:%M:%S"),
         "message": f"TradingView 수신: {data.get('symbol', '?')} @ {data.get('price', '?')} | 구조:{data.get('market_structure', '?')} CVD:{data.get('cvd', '?')}",
@@ -146,6 +151,19 @@ def tradingview_webhook():
     # 진입/주시 모두 엔진이 통합 처리 (포지션 유무에 따라 자동 분기)
     result = engine.process_tradingview(data)
     return jsonify(result)
+
+
+@app.route("/api/report")
+def performance_report():
+    """누적 성과 지표 (승률/PF/기대값/R:R/MDD/Recovery/슬리피지/레이턴시)"""
+    return jsonify(engine.db.compute_metrics())
+
+
+@app.route("/api/self_improve", methods=["POST"])
+def self_improve():
+    """자기 평가 + Claude Code용 개선 프롬프트 생성 (reports/ 에 저장)"""
+    text = engine.generate_self_improvement()
+    return jsonify({"success": True, "prompt": text})
 
 
 @app.route("/api/logs")

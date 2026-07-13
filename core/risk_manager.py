@@ -78,6 +78,39 @@ class RiskManager:
         lot = risk_amount / risk_per_lot
         return max(0.0, lot)   # 최소단위 반올림은 엔진이 종목 스펙으로 처리
 
+    def validate_effective_risk(self, account_balance: float, entry_price: float,
+                                stop_loss: float, lot: float,
+                                contract_size: float) -> Dict[str, Any]:
+        """
+        브로커 최소 lot 강제 상향 '이후'의 실효 리스크 검증.
+        소액 계좌($100)에서 volume_min=0.01이 이론 lot(0.002)을 덮어써
+        거래당 리스크가 10%+로 폭주하던 산술 붕괴를 여기서 차단한다.
+        실효 리스크 > 하드캡이면 진입 거부가 정답 — 조용한 초과 리스크는 금지.
+        """
+        sl_distance = abs(entry_price - stop_loss)
+        risk_usd = sl_distance * contract_size * lot
+        if account_balance <= 0:
+            return {"ok": False, "risk_usd": risk_usd, "risk_pct": 1.0,
+                    "reason": "잔고 조회 실패"}
+        risk_pct = risk_usd / account_balance
+        if risk_pct > self.MAX_RISK_HARD_CAP:
+            return {
+                "ok": False, "risk_usd": round(risk_usd, 2), "risk_pct": risk_pct,
+                "reason": (f"최소 주문단위 리스크 {risk_pct*100:.1f}% > 하드캡 "
+                           f"{self.MAX_RISK_HARD_CAP*100:.0f}% - 진입 거부 "
+                           f"(손절폭 ${sl_distance:.2f} × {lot} lot, 잔고 ${account_balance:.0f})"),
+            }
+        return {"ok": True, "risk_usd": round(risk_usd, 2), "risk_pct": risk_pct, "reason": ""}
+
+    def check_drawdown(self, current_equity: float, peak_equity: float) -> Dict[str, Any]:
+        """Max Drawdown 하드캡 — 계좌 생존의 최후 방어선 (시간 청산 대신 도입)"""
+        from config import Config
+        cap = getattr(Config, "MAX_DRAWDOWN_PCT", 0.25)
+        if peak_equity <= 0 or current_equity <= 0:
+            return {"breached": False, "dd_pct": 0.0}
+        dd = (peak_equity - current_equity) / peak_equity
+        return {"breached": dd >= cap, "dd_pct": dd, "cap": cap}
+
     def can_trade(self, account_balance: float) -> Dict[str, Any]:
         if self.initial_balance <= 0:
             return {"allowed": True, "reason": ""}

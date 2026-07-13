@@ -12,6 +12,39 @@
 
 ---
 
+## ⚡ 개정 이력: v8 전면 재설계 (2026-07-13, 이 문서 작성 직후)
+
+ChatGPT의 16개 지침 회신을 받아 아래가 **이미 구현 완료**되었다. 이 문서 본문
+(3~12장)은 v7 기준이므로, 다음 변경분을 겹쳐 읽어야 한다:
+
+| # | 변경 | 구현 위치 |
+|---|------|----------|
+| 1 | 시장가 진입 폐기 → **지정가 래더** (0.3/0.7×ATR, TTL 30분, 스프레드 역이용) | `trading_engine._execute_entry`, `mt5_connector.place_limit_order` |
+| 2 | **스프레드 필터** (스프레드 > 0.15×ATR이면 진입 보류) | `trading_engine._entry_gates` |
+| 3 | **소액계좌 리스크 거부** (최소 lot 실효 리스크 > 하드캡 5% → 진입 거부) — 12.3 해결 | `risk_manager.validate_effective_risk` |
+| 4 | **백테스트-실거래 청산 동기화** (0.75R 50% 부분익절 + 본전 + 구조 트레일, 양쪽 동일) — 12.4 해결 | `trading_engine._manage_stops` ↔ Pine v8 |
+| 5 | **SQLite DB** (신호가/실체결가/슬리피지/레이턴시/AI판단/리뷰 영구 기록) — 12.6·12.10 해결 | `core/database.py` |
+| 6 | 당일 강제 청산·시간 손절 폐기 → **MDD 하드캡 25%** (전량청산+중단) | `_session_guard_loop`, `risk_manager.check_drawdown` |
+| 7 | **MTF 분석** (1D/4H/1H/30M) + **오더플로우 프록시** (1분 분해 delta/CVD/다이버전스/스윕/FVG/VWAP) 구조화 JSON | Pine v8 → payload `mtf`/`of` 객체 |
+| 8 | **구조 기반 동적 SL/TP** (스윙±0.3ATR 트레일, 추세 정렬 시 TP 연장/역전 시 당김) | `_manage_stops` |
+| 9 | **피라미딩** (기존 +1R 유리 & AI 신뢰도 0.8+ & 새 근거일 때만 0.5배 증량, 최대 2단) | `_check_pyramid` |
+| 10 | **실시간 감시** (5초 틱 루프, 60초 내 1.2×ATR 급변 → AI 긴급 개입: 유지/SL축소/즉시청산) | `_fast_monitor_loop`, `claude_ai.intervention_check` |
+| 11 | **AI 투명성 보고서** (시장분석/근거/위험/롱숏 시나리오 로그 출력) | `_log_ai_report` |
+| 12 | **거래 종료 자동 리뷰** (진입/청산 평가, 실수, 다음 대응 — DB 저장) | `claude_ai.review_trade` |
+| 13 | **자기개선 프롬프트 자동 생성** (10건 청산마다 `reports/improve_*.md`) — 코드 자가 수정은 금지, 텍스트만 | `generate_self_improvement`, `POST /api/self_improve` |
+| 14 | 웹훅 시크릿을 헤더 → **payload JSON 필드**로 이동 (Pine 입력) — 12.8 완화 | `app.py`, Pine `whSecret` |
+| 15 | Pine 백테스트도 **지정가 체결 모델**로 전환 (미체결 취소 포함 — 정직한 체결 가정) | Pine v8 `strategy.entry(limit=...)` |
+| 16 | EV 극대화 교리로 AI 프롬프트 전면 개정 (무손실 추구 명시적 금지) | `claude_ai.analyze_tradingview` |
+
+**미해결로 남긴 것 (정직하게)**: 진짜 Footprint(가격대별 Bid/Ask 체결량)는
+TradingView가 외부 제공하지 않는 데이터라 **1분봉 분해 프록시**로 대체했다
+(절대값이 아닌 방향/다이버전스만 신뢰하도록 AI에 지시). 또한 v8 전체가
+**데모 재검증 전**이다 — 백테스트·데모 실측이 다음 단계다.
+
+---
+
+---
+
 ## 목차
 
 1. [프로젝트 개요](#1-프로젝트-개요)
