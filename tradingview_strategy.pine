@@ -48,9 +48,7 @@ bodyVal  = close - open
 inWindow = not na(time(timeframe.period, tradeSess, sessionTZ))
 
 // ── 다중 시간 프레임 (1D/4H/1H/30M 구조·추세) ───────────
-f_dir(tf) =>
-    request.security(syminfo.tickerid, tf, close > ta.ema(close, 50) ? 1 : -1,
-         barmerge.gaps_off, barmerge.lookahead_off)
+f_dir(tf) => request.security(syminfo.tickerid, tf, close > ta.ema(close, 50) ? 1 : -1, barmerge.gaps_off, barmerge.lookahead_off)
 dDir  = f_dir("D")
 h4Dir = f_dir("240")
 h1Dir = f_dir("60")
@@ -72,8 +70,9 @@ if newDay
 cvd += delta
 cvdSlope = cvd > cvd[1] ? "up" : "down"
 // 델타 다이버전스: 가격 신고/신저 vs 델타 약화
-deltaDiv = close > close[1] and high >= ta.highest(high, 10) and delta < delta[1] ? "bear_div" :
-           close < close[1] and low <= ta.lowest(low, 10) and delta > delta[1] ? "bull_div" : "none"
+bearDiv = close > close[1] and high >= ta.highest(high, 10) and delta < delta[1]
+bullDiv = close < close[1] and low <= ta.lowest(low, 10) and delta > delta[1]
+deltaDiv = bearDiv ? "bear_div" : bullDiv ? "bull_div" : "none"
 // 임밸런스 프록시: 매수 물량 비중
 imb = totVol > 0 ? math.round(buyVol / totVol * 100.) / 100. : 0.5
 
@@ -177,34 +176,24 @@ impStr = impulseUp ? "up" : impulseDn ? "down" : "none"
 
 f_num(x) => na(x) ? "0" : str.tostring(x, format.mintick)
 
+// JSON 조립: Pine의 줄바꿈(continuation) 규칙 충돌을 피하기 위해
+// 각 문장을 한 줄로 유지한다 (줄을 임의로 나누면 컴파일 오류 발생)
 buildJson() =>
-    '{"symbol": "' + symbolName + '"' +
-      (whSecret != "" ? ', "secret": "' + whSecret + '"' : "") +
-      ', "action": "' + sigAction + '"' +
-      ', "mode": "GOLD_STRUCT_V8"' +
-      ', "price": ' + str.tostring(close, format.mintick) +
-      ', "impulse": "' + impStr + '"' +
-      ', "body_atr": ' + str.tostring(atrVal > 0 ? bodyVal / atrVal : 0, "#.##") +
-      ', "rsi": ' + str.tostring(rsi14, "#.#") +
-      ', "atr": ' + str.tostring(atrVal, format.mintick) +
-      ', "ema200": ' + str.tostring(emaTrend, format.mintick) +
-      ', "vwap": ' + f_num(vwapVal) +
-      ', "swing_hi": ' + f_num(swingHi) +
-      ', "swing_lo": ' + f_num(swingLo) +
-      ', "sweep": "' + sweepStr + '"' +
-      ', "fvg_up": ' + f_num(fvgUp) +
-      ', "fvg_dn": ' + f_num(fvgDn) +
-      ', "mtf": {"d": "' + f_str(dDir) + '", "h4": "' + f_str(h4Dir) +
-                '", "h1": "' + f_str(h1Dir) + '", "m30": "' + f_str(m30Dir) + '"}' +
-      ', "of": {"delta": ' + str.tostring(delta, "#") +
-               ', "delta_dir": "' + (delta >= 0 ? "buy" : "sell") + '"' +
-               ', "cvd_slope": "' + cvdSlope + '"' +
-               ', "delta_div": "' + deltaDiv + '"' +
-               ', "buy_ratio": ' + str.tostring(imb, "#.##") + '}' +
-      ', "in_session": ' + (inWindow ? "true" : "false") +
-      ', "sl": ' + str.tostring(sl_, format.mintick) +
-      ', "tp": ' + str.tostring(tp_, format.mintick) +
-      ', "timeframe": "' + timeframe.period + '"}'
+    j = '{"symbol": "' + symbolName + '"'
+    j += whSecret != "" ? ', "secret": "' + whSecret + '"' : ""
+    j += ', "action": "' + sigAction + '", "mode": "GOLD_STRUCT_V8"'
+    j += ', "price": ' + str.tostring(close, format.mintick)
+    j += ', "impulse": "' + impStr + '", "body_atr": ' + str.tostring(atrVal > 0 ? bodyVal / atrVal : 0, "#.##")
+    j += ', "rsi": ' + str.tostring(rsi14, "#.#") + ', "atr": ' + str.tostring(atrVal, format.mintick)
+    j += ', "ema200": ' + str.tostring(emaTrend, format.mintick) + ', "vwap": ' + f_num(vwapVal)
+    j += ', "swing_hi": ' + f_num(swingHi) + ', "swing_lo": ' + f_num(swingLo)
+    j += ', "sweep": "' + sweepStr + '", "fvg_up": ' + f_num(fvgUp) + ', "fvg_dn": ' + f_num(fvgDn)
+    j += ', "mtf": {"d": "' + f_str(dDir) + '", "h4": "' + f_str(h4Dir) + '", "h1": "' + f_str(h1Dir) + '", "m30": "' + f_str(m30Dir) + '"}'
+    j += ', "of": {"delta": ' + str.tostring(delta, "#") + ', "delta_dir": "' + (delta >= 0 ? "buy" : "sell") + '", "cvd_slope": "' + cvdSlope + '", "delta_div": "' + deltaDiv + '", "buy_ratio": ' + str.tostring(imb, "#.##") + '}'
+    j += ', "in_session": ' + (inWindow ? "true" : "false")
+    j += ', "sl": ' + str.tostring(sl_, format.mintick) + ', "tp": ' + str.tostring(tp_, format.mintick)
+    j += ', "timeframe": "' + timeframe.period + '"}'
+    j
 
 alert(buildJson(), alert.freq_once_per_bar_close)
 
