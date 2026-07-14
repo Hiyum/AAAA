@@ -87,6 +87,12 @@ class TradingEngine:
         self.active = True
 
         self.log("AI 자동매매 시작 [TradingView → Claude AI → MT5] v8", "SUCCESS")
+        if self.ai.available:
+            self.log("→ Claude AI 연결 확인: 정상 (진입 검증 활성)", "SUCCESS")
+        else:
+            self.log(f"⚠ Claude AI 사용 불가: {self.ai.unavailable_reason}", "ERROR")
+            if getattr(Config, "AI_CONFIRM_ENTRIES", True):
+                self.log("⚠ AI 검증 모드이므로 AI가 복구될 때까지 모든 신규 진입이 보류됩니다", "ERROR")
         self.log("→ 집행: 지정가 래더 (스프레드 역이용) | 보유: 시장 구조가 결정", "INFO")
         self.log(f"→ MDD 하드캡 {getattr(Config, 'MAX_DRAWDOWN_PCT', 0.25)*100:.0f}% | "
                  f"일일 예산 {getattr(Config, 'MAX_TRADES_PER_DAY', 6)}발 | "
@@ -196,6 +202,14 @@ class TradingEngine:
             return {"message": "대기 지정가 존재 - 새 진입 보류"}
 
         # ── Claude AI 판단 ──────────────────────────────────
+        # fail-safe: AI 검증 모드인데 AI가 죽어 있으면 '신호 직접 실행'으로
+        # 조용히 넘어가지 않고 진입을 보류한다 (검증 없는 거래 금지)
+        if getattr(Config, "AI_CONFIRM_ENTRIES", True) and not self.ai.available:
+            self.log(f"[AI 사용 불가 - 진입 보류] {self.ai.unavailable_reason}", "ERROR")
+            self.log("→ AI 없이 Pine 신호를 그대로 실행하려면 config.py에서 "
+                     "AI_CONFIRM_ENTRIES=False로 명시적으로 바꾸세요", "INFO")
+            return {"message": f"AI 사용 불가로 진입 보류: {self.ai.unavailable_reason}"}
+
         payload = dict(payload)
         payload["trades_left_today"] = getattr(Config, "MAX_TRADES_PER_DAY", 6) - self._trades_today
         if autonomous:

@@ -50,12 +50,19 @@ class ClaudeAI:
     """
 
     def __init__(self):
-        self.available = ANTHROPIC_AVAILABLE and bool(Config.ANTHROPIC_API_KEY)
+        self.unavailable_reason = ""
+        if not ANTHROPIC_AVAILABLE:
+            self.unavailable_reason = "anthropic 패키지 없음 → 해결: pip install anthropic"
+        elif not Config.ANTHROPIC_API_KEY:
+            self.unavailable_reason = ("ANTHROPIC_API_KEY가 비어 있음 → 해결: 프로젝트 폴더의 "
+                                       ".env 확인 + 그 폴더에서 python app.py 실행")
+        self.available = not self.unavailable_reason
         if self.available:
             try:
                 self.client = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
             except Exception as e:
                 logger.warning(f"Claude 클라이언트 초기화 실패: {e}")
+                self.unavailable_reason = f"클라이언트 초기화 실패: {e}"
                 self.available = False
         self.model = Config.CLAUDE_MODEL
 
